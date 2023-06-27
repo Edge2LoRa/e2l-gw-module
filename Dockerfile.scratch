@@ -1,0 +1,66 @@
+####################################################################################################
+## Builder
+####################################################################################################
+FROM rust:latest AS builder
+
+RUN rustup target add x86_64-unknown-linux-musl
+RUN apt update && apt install -y musl-tools musl-dev
+RUN update-ca-certificates
+
+# Create appuser
+ENV USER=lora-proxy
+ENV UID=10001
+
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    "${USER}"
+
+
+WORKDIR /lora-proxy
+
+COPY ./ .
+
+RUN cargo build --target x86_64-unknown-linux-musl --release
+
+####################################################################################################
+## Final image
+####################################################################################################
+FROM scratch
+
+# Environment usate per raggiungere il Network Bridge
+ENV NB_HOST=network-bridge
+ENV NB_PORT=1680
+# Environment usata da questo agent
+ENV BIND_ADDR=0.0.0.0
+ENV LOCAL_PORT=1680
+# Environment usate per raggiungere l'mqtt esterno
+ENV MQTT=true
+ENV BROKER_URL=broker.url
+ENV BROKER_PORT=1885
+ENV BROKER_AUTH_USERNAME=Username
+ENV BROKER_AUTH_PASSWORD=Password
+ENV BROKER_TOPIC=/topic
+ENV DEBUG=true
+ENV FILE_AND_PATH=/lora-proxy/filters.json
+
+# Import from builder.
+
+COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /etc/group /etc/group
+
+WORKDIR /lora-proxy
+
+# Copy our build artifacts.
+COPY --from=builder /lora-proxy/target/x86_64-unknown-linux-musl/release/lora-proxy ./
+COPY --from=builder /lora-proxy/src/filters.json ./
+
+# Use an unprivileged user.
+USER lora-proxy:lora-proxy
+EXPOSE 1680/udp
+
+CMD ["/lora-proxy/lora-proxy"]

@@ -1,0 +1,22 @@
+{
+  "dev_addr": [
+    "0061DF80",
+    "001AED84"
+  ],
+  "dev_addr_intervals": [
+    {
+      "dev_addr_start": "e0100000",
+      "dev_addr_end": "e011ffff"
+    },
+    {
+      "dev_addr_start": "7f3a0000",
+      "dev_addr_end": "7f3a0fff"
+    }
+  ],
+  "dev_eui_intervals": [
+    {
+      "dev_eui_start": "",
+      "dev_eui_end": ""
+    }
+  ]
+}

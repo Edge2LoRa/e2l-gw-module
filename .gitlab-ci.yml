@@ -1,0 +1,15 @@
+stages:
+  - push
+
+#https://github.com/renoirb/experiments-201908-rush-typescript-just-bili-monorepo/blob/master/rush.json
+
+push_images:
+  stage: push
+  image: docker:latest
+  services:
+     - docker:dind
+  script:
+      - TIME=$(date +"%Y%m%d-%H%M")
+      - docker build -t lora/lora-proxy:$TIME -f Dockerfile.scratch ./
+      - docker tag lora/lora-proxy:$TIME registry.unidata.it/lora/lora-proxy-prod:$TIME
+      - docker push registry.unidata.it/lora/lora-proxy-prod:$TIME
