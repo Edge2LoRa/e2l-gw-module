@@ -1,38 +1,42 @@
-mod lorawan_structs;
+mod edge_processing;
 mod json_structs;
+mod lorawan_structs;
 mod mqtt_client;
 
 #[macro_use]
 extern crate lazy_static;
 extern crate base64;
 extern crate core;
+extern crate dotenv;
 extern crate getopts;
 extern crate lorawan_encoding;
 extern crate rand;
+extern crate rumqttc;
+extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
-extern crate dotenv;
-extern crate serde;
-extern crate rumqttc;
 
-use lorawan_encoding::parser::{parse, DataHeader, DataPayload, PhyPayload, AsPhyPayloadBytes, MHDRAble, MType};
+use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
+use lorawan_encoding::keys::AES128;
+use lorawan_encoding::parser::{
+    parse, AsPhyPayloadBytes, DataHeader, DataPayload, MHDRAble, MType, PhyPayload,
+};
+use lorawan_structs::lorawan_structs::lora_structs::{Rxpk, RxpkContent};
+use lorawan_structs::lorawan_structs::{ForwardInfo, ForwardProtocols};
+use mqtt_client::mqtt_structs::mqtt_structs::{MqttJson, MqttVariables};
+use rand::Rng;
+use rumqttc::{Client, MqttOptions, QoS};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt;
-use std::fmt::{Display};
+use std::fmt::Display;
 use std::net::UdpSocket;
+use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use rand::Rng;
-use lorawan_structs::lorawan_structs::{ForwardInfo, ForwardProtocols};
-use lorawan_structs::lorawan_structs::lora_structs::{Rxpk, RxpkContent};
-use std::str;
-use rumqttc::{Client, MqttOptions, QoS};
-use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
-use mqtt_client::mqtt_structs::mqtt_structs::{MqttJson, MqttVariables};
 
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
@@ -65,8 +69,8 @@ struct HexSlice<'a>(&'a [u8]);
 
 impl<'a> HexSlice<'a> {
     fn new<T>(data: &'a T) -> HexSlice<'a>
-        where
-            T: ?Sized + AsRef<[u8]> + 'a,
+    where
+        T: ?Sized + AsRef<[u8]> + 'a,
     {
         HexSlice(data.as_ref())
     }
@@ -88,8 +92,8 @@ trait HexDisplayExt {
 }
 
 impl<T> HexDisplayExt for T
-    where
-        T: ?Sized + AsRef<[u8]>,
+where
+    T: ?Sized + AsRef<[u8]>,
 {
     fn hex_display(&self) -> HexSlice<'_> {
         HexSlice::new(self)
@@ -110,7 +114,15 @@ fn get_data_from_json(from_upstream: &[u8]) -> Rxpk {
     data
 }
 
-fn build_json_for_broker(idx: u64, gw_mac: String, data: &RxpkContent, fcnt: Option<u16>, mtype: MType, dev_addr: Option<u32>, dev_eui: Option<u64>) -> String {
+fn build_json_for_broker(
+    idx: u64,
+    gw_mac: String,
+    data: &RxpkContent,
+    fcnt: Option<u16>,
+    mtype: MType,
+    dev_addr: Option<u32>,
+    dev_eui: Option<u64>,
+) -> String {
     let mut mqtt_json = MqttJson::from(data);
     mqtt_json.index = idx;
     if dev_addr.is_some() {
@@ -140,21 +152,21 @@ impl From<&RxpkContent> for MqttJson {
         let rssi_clone: i32;
         if m.rssi.is_some() {
             rssi_clone = m.rssi.unwrap();
-        } else{
+        } else {
             rssi_clone = 0;
         }
 
         let lsnr_clone: f32;
         if m.lsnr.is_some() {
             lsnr_clone = m.lsnr.unwrap();
-        } else{
+        } else {
             lsnr_clone = 0.0;
         }
 
         let chan_clone: u32;
         if m.chan.is_some() {
             chan_clone = m.chan.unwrap();
-        } else{
+        } else {
             chan_clone = 0;
         }
 
@@ -195,8 +207,16 @@ fn charge_environment_variables() -> EnvVariables {
         remote_addr: dotenv::var("NB_HOST").unwrap(),
         bind_addr: dotenv::var("AGENT_BIND_ADDR").unwrap(),
         filters: dotenv::var("FILE_AND_PATH").unwrap(),
-        debug: if dotenv::var("DEBUG").unwrap().is_empty() { false } else { dotenv::var("DEBUG").unwrap().parse().unwrap() },
-        mqtt: if dotenv::var("MQTT").unwrap().is_empty() { false } else { dotenv::var("MQTT").unwrap().parse().unwrap() },
+        debug: if dotenv::var("DEBUG").unwrap().is_empty() {
+            false
+        } else {
+            dotenv::var("DEBUG").unwrap().parse().unwrap()
+        },
+        mqtt: if dotenv::var("MQTT").unwrap().is_empty() {
+            false
+        } else {
+            dotenv::var("MQTT").unwrap().parse().unwrap()
+        },
     }
 }
 
@@ -228,7 +248,11 @@ fn main() {
     let mqtt_variables = charge_mqtt_variables();
     let mut mqtt_client: Option<Client> = None;
     if env_variables.mqtt == true {
-        mqtt_client = Some(initialize_mqtt(&mqtt_variables.broker_url, mqtt_variables.broker_port.parse().unwrap(), &mqtt_variables.broker_topic));
+        mqtt_client = Some(initialize_mqtt(
+            &mqtt_variables.broker_url,
+            mqtt_variables.broker_port.parse().unwrap(),
+            &mqtt_variables.broker_topic,
+        ));
     }
     let path = env_variables.filters;
     let filters: FilterJson = read_json_from_file((path).to_string());
@@ -240,7 +264,11 @@ fn main() {
     let local_port: i32 = env_variables.local_port.parse().unwrap();
     let remote_port: u16 = env_variables.remote_port.parse().unwrap();
     let remote_host: String = env_variables.remote_addr.parse().unwrap();
-    let bind_addr: String = if env_variables.bind_addr.is_empty() { "127.0.0.1".to_owned() } else { env_variables.bind_addr.parse().unwrap() };
+    let bind_addr: String = if env_variables.bind_addr.is_empty() {
+        "127.0.0.1".to_owned()
+    } else {
+        env_variables.bind_addr.parse().unwrap()
+    };
 
     let mut start_addrs: Vec<u32> = vec![];
     let mut end_addrs: Vec<u32> = vec![];
@@ -248,7 +276,8 @@ fn main() {
     if !filters.dev_addr_intervals.is_empty() {
         for intervals in &filters.dev_addr_intervals {
             if !intervals.dev_addr_end.is_empty() && !intervals.dev_addr_start.is_empty() {
-                start_addrs.push(u32::from_str_radix(intervals.dev_addr_start.as_str(), 16).unwrap());
+                start_addrs
+                    .push(u32::from_str_radix(intervals.dev_addr_start.as_str(), 16).unwrap());
                 end_addrs.push(u32::from_str_radix(intervals.dev_addr_end.as_str(), 16).unwrap())
             } else {
                 start_addrs.push(u32::from_str_radix("00000000", 16).unwrap());
@@ -269,7 +298,8 @@ fn main() {
     if !filters.dev_eui_intervals.is_empty() {
         for intervals in &filters.dev_eui_intervals {
             if !intervals.dev_eui_start.is_empty() && !intervals.dev_eui_end.is_empty() {
-                start_deveui.push(u64::from_str_radix(intervals.dev_eui_start.as_str(), 16).unwrap());
+                start_deveui
+                    .push(u64::from_str_radix(intervals.dev_eui_start.as_str(), 16).unwrap());
                 end_deveui.push(u64::from_str_radix(intervals.dev_eui_end.as_str(), 16).unwrap())
             } else {
                 start_deveui.push(u64::from_str_radix("0007ED0000000000", 16).unwrap());
@@ -289,9 +319,11 @@ fn main() {
         ..Default::default()
     };
     for ele in &fwinfo.start_addr {
-        println!("Allowing Dev addresses from {:x?} to {:x?}",
-                 fwinfo.start_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()],
-                 fwinfo.end_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()]);
+        println!(
+            "Allowing Dev addresses from {:x?} to {:x?}",
+            fwinfo.start_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()],
+            fwinfo.end_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()]
+        );
     }
     // zmq::init_zmq();
     print!("List of allowed Device Address : ");
@@ -301,12 +333,30 @@ fn main() {
 
     println!();
     for ele in &fwinfo.start_filter_deveui {
-        println!("Blocking Dev Eui from {:x?} to {:x?}",
-                 fwinfo.start_filter_deveui[fwinfo.start_filter_deveui.iter().position(|&x| &x == ele).unwrap()],
-                 fwinfo.end_filter_deveui[fwinfo.start_filter_deveui.iter().position(|&x| &x == ele).unwrap()]);
+        println!(
+            "Blocking Dev Eui from {:x?} to {:x?}",
+            fwinfo.start_filter_deveui[fwinfo
+                .start_filter_deveui
+                .iter()
+                .position(|&x| &x == ele)
+                .unwrap()],
+            fwinfo.end_filter_deveui[fwinfo
+                .start_filter_deveui
+                .iter()
+                .position(|&x| &x == ele)
+                .unwrap()]
+        );
     }
     // zmq::init_zmq();
-    forward(&bind_addr, local_port, &remote_host, remote_port, fwinfo, mqtt_client, mqtt_variables.broker_topic);
+    forward(
+        &bind_addr,
+        local_port,
+        &remote_host,
+        remote_port,
+        fwinfo,
+        mqtt_client,
+        mqtt_variables.broker_topic,
+    );
 }
 
 fn debug(msg: String) {
@@ -322,21 +372,24 @@ fn debug(msg: String) {
 
 fn extract_dev_addr_array(v: Vec<u8>) -> [u8; 4] {
     let default_array: [u8; 4] = [0, 0, 0, 0];
-    v.try_into()
-        .unwrap_or(default_array)
+    v.try_into().unwrap_or(default_array)
 }
 
 fn extract_dev_eui_array(v: Vec<u8>) -> [u8; 8] {
     let default_array: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
-    v.try_into()
-        .unwrap_or(default_array)
+    v.try_into().unwrap_or(default_array)
 }
 
-fn check_range<T: Display + PartialEq + PartialOrd>(dev: T, start_intervals: Vec<T>, end_intervals: Vec<T>) -> bool {
+fn check_range<T: Display + PartialEq + PartialOrd>(
+    dev: T,
+    start_intervals: Vec<T>,
+    end_intervals: Vec<T>,
+) -> bool {
     let mut check: bool = false;
     for ele in &start_intervals {
-        if dev >= start_intervals[start_intervals.iter().position(|x| x == ele).unwrap()] &&
-            dev <= end_intervals[start_intervals.iter().position(|x| x == ele).unwrap()] {
+        if dev >= start_intervals[start_intervals.iter().position(|x| x == ele).unwrap()]
+            && dev <= end_intervals[start_intervals.iter().position(|x| x == ele).unwrap()]
+        {
             check = true;
             break;
         }
@@ -344,13 +397,24 @@ fn check_range<T: Display + PartialEq + PartialOrd>(dev: T, start_intervals: Vec
     return check;
 }
 
-fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String){
+fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String) {
     thread::spawn(move || {
-        mqtt_client.unwrap().publish(topic, QoS::AtLeastOnce, false, json.as_bytes()).unwrap();
+        mqtt_client
+            .unwrap()
+            .publish(topic, QoS::AtLeastOnce, false, json.as_bytes())
+            .unwrap();
     });
 }
 
-fn forward(bind_addr: &str, local_port: i32, remote_host: &str, remote_port: u16, fwinfo: ForwardInfo, mqtt_client: Option<Client>, topic: String) {
+fn forward(
+    bind_addr: &str,
+    local_port: i32,
+    remote_host: &str,
+    remote_port: u16,
+    fwinfo: ForwardInfo,
+    mqtt_client: Option<Client>,
+    topic: String,
+) {
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
     let mut idx: u64 = 0;
@@ -472,68 +536,156 @@ fn forward(bind_addr: &str, local_port: i32, remote_host: &str, remote_port: u16
             let mut will_send = true;
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
-                0 => { // PUSH_DATA
+                0 => {
+                    // PUSH_DATA
                     let data_json: Rxpk = get_data_from_json(&to_send[12..]);
-                    debug(format!("Evaluate if forwarding packet from client {:?} to upstream server", data_json.rxpk));
+                    debug(format!(
+                        "Evaluate if forwarding packet from client {:?} to upstream server",
+                        data_json.rxpk
+                    ));
                     if data_json.rxpk.len() == 0 {
                         match fwinfo.forward_protocol {
                             ForwardProtocols::UDP => {
-                                debug(format!("Forwarding Other data to {:x?}", fwinfo.forward_host));
-                            }
-                            // _ => panic!("Forwarding protocol not implemented!"),
+                                debug(format!(
+                                    "Forwarding Other data to {:x?}",
+                                    fwinfo.forward_host
+                                ));
+                            } // _ => panic!("Forwarding protocol not implemented!"),
                         }
                     } else {
                         for packet in data_json.rxpk.iter() {
-                            let data = base64::decode(&packet.data).unwrap();
-                            let data1 = base64::decode(&packet.data).unwrap();
-                            let data2 = base64::decode(&packet.data).unwrap();
+                            let data: Vec<u8> = base64::decode(&packet.data).unwrap();
+                            let data1: Vec<u8> = base64::decode(&packet.data).unwrap();
+                            let data2: Vec<u8> = base64::decode(&packet.data).unwrap();
 
-                            let gwmac = hex::encode(&to_send[4..12]);
+                            let gwmac: String = hex::encode(&to_send[4..12]);
                             debug(format!("Extracted GwMac {:x?}", gwmac));
 
                             if let Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) = parse(data) {
                                 let fhdr = phy.fhdr();
+                                let fcnt = fhdr.fcnt();
                                 let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
 
-                                let dev_addr = u32::from_be_bytes(extract_dev_addr_array(dev_addr_vec.into_iter().rev().collect()));
+                                let dev_addr = u32::from_be_bytes(extract_dev_addr_array(
+                                    dev_addr_vec.into_iter().rev().collect(),
+                                ));
                                 debug(format!("Extracted DevAddr {:x?}", dev_addr));
                                 if mqtt_client.clone().is_some() {
-                                    let json_to_send = build_json_for_broker(idx, gwmac, packet, Some(fhdr.fcnt()), phy.mhdr().mtype(), Option::from(dev_addr), None);
+                                    let json_to_send = build_json_for_broker(
+                                        idx,
+                                        gwmac,
+                                        packet,
+                                        Some(fcnt),
+                                        phy.mhdr().mtype(),
+                                        Option::from(dev_addr),
+                                        None,
+                                    );
                                     idx = (idx + 1) % 18446744073709551615;
                                     debug(format!("Payload Prepared for broker {}", json_to_send));
-                                    send_to_broker(mqtt_client.clone(), topic.clone(), json_to_send);
+                                    send_to_broker(
+                                        mqtt_client.clone(),
+                                        topic.clone(),
+                                        json_to_send,
+                                    );
                                 };
-                                if check_range(dev_addr, fwinfo.start_addr.clone(), fwinfo.end_addr.clone()) || fwinfo.dev_addrs.contains(&dev_addr) {
-                                    match fwinfo.forward_protocol {
-                                        ForwardProtocols::UDP => {
-                                            debug(format!("Forwarding to {:x?}", fwinfo.forward_host));
+                                if check_range(
+                                    dev_addr,
+                                    fwinfo.start_addr.clone(),
+                                    fwinfo.end_addr.clone(),
+                                ) || fwinfo.dev_addrs.contains(&dev_addr)
+                                {
+                                    // process_packet(dev_addr, phy);
+                                    match dev_addr {
+                                        0x001AED84 => {
+                                            debug(format!("Processing Packet"));
+                                            let app_s_key: AES128 = AES128::from([
+                                                0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
+                                                0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
+                                            ]);
+                                            let decrypted_data_payload = phy
+                                                .decrypt(
+                                                    Some(&app_s_key),
+                                                    Some(&app_s_key),
+                                                    fcnt.into(),
+                                                )
+                                                .unwrap();
+                                            debug(format!("Decrypted Packet"));
+                                            let frame_payload_result =
+                                                decrypted_data_payload.frm_payload().unwrap();
+                                            match frame_payload_result {
+                                                lorawan_encoding::parser::FRMPayload::Data(
+                                                    frame_payload,
+                                                ) => {
+                                                    debug(format!(
+                                                        "Decoded Packet: {:?}",
+                                                        frame_payload
+                                                    ));
+                                                }
+                                                _ => debug(format!("NO BENE")),
+                                            };
                                         }
-                                        // _ => panic!("Forwarding protocol not implemented!"),
+                                        _ => {
+                                            match fwinfo.forward_protocol {
+                                                ForwardProtocols::UDP => {
+                                                    debug(format!(
+                                                        "Forwarding to {:x?}",
+                                                        fwinfo.forward_host
+                                                    ));
+                                                } // _ => panic!("Forwarding protocol not implemented!"),
+                                            }
+                                        }
                                     }
                                 } else {
-                                    debug(format!("Not forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]));
+                                    debug(format!(
+                                        "Not forwarding packet from client {} to upstream server",
+                                        PACKETNAMES[&to_send[3]]
+                                    ));
                                     will_send = false;
                                     break;
                                 }
                             } else if let Ok(PhyPayload::JoinRequest(phy)) = parse(data1) {
                                 let dev_eui_vec = phy.dev_eui().as_ref().to_vec();
-                                let dev_eui = u64::from_be_bytes(extract_dev_eui_array(dev_eui_vec.into_iter().rev().collect()));
+                                let dev_eui = u64::from_be_bytes(extract_dev_eui_array(
+                                    dev_eui_vec.into_iter().rev().collect(),
+                                ));
                                 debug(format!("Extracted DevEui {:x?}", dev_eui));
                                 if mqtt_client.clone().is_some() {
-                                    let json_to_send = build_json_for_broker(idx , gwmac, packet, None, phy.mhdr().mtype(), None, Some(dev_eui));
+                                    let json_to_send = build_json_for_broker(
+                                        idx,
+                                        gwmac,
+                                        packet,
+                                        None,
+                                        phy.mhdr().mtype(),
+                                        None,
+                                        Some(dev_eui),
+                                    );
                                     idx = (idx + 1) % 18446744073709551615;
                                     debug(format!("Payload Prepared for broker {}", json_to_send));
-                                    send_to_broker(mqtt_client.clone(), topic.clone(), json_to_send);
+                                    send_to_broker(
+                                        mqtt_client.clone(),
+                                        topic.clone(),
+                                        json_to_send,
+                                    );
                                 };
-                                if !check_range(dev_eui, fwinfo.start_filter_deveui.clone(), fwinfo.end_filter_deveui.clone()) {
+                                if !check_range(
+                                    dev_eui,
+                                    fwinfo.start_filter_deveui.clone(),
+                                    fwinfo.end_filter_deveui.clone(),
+                                ) {
                                     match fwinfo.forward_protocol {
                                         ForwardProtocols::UDP => {
-                                            debug(format!("Forwarding to {:x?}  JoinRequest with len {}", fwinfo.forward_host, phy.as_bytes().len()));
-                                        }
-                                        // _ => panic!("Forwarding protocol not implemented!"),
+                                            debug(format!(
+                                                "Forwarding to {:x?}  JoinRequest with len {}",
+                                                fwinfo.forward_host,
+                                                phy.as_bytes().len()
+                                            ));
+                                        } // _ => panic!("Forwarding protocol not implemented!"),
                                     }
                                 } else {
-                                    debug(format!("Not forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]));
+                                    debug(format!(
+                                        "Not forwarding packet from client {} to upstream server",
+                                        PACKETNAMES[&to_send[3]]
+                                    ));
                                     will_send = false;
                                     break;
                                 }
