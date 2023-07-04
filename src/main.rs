@@ -1,4 +1,3 @@
-mod edge_processing;
 mod json_structs;
 mod lorawan_structs;
 mod mqtt_client;
@@ -28,8 +27,9 @@ use rand::Rng;
 use rumqttc::{Client, MqttOptions, QoS};
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt;
 use std::fmt::Display;
+use std::fmt::{self};
+// use std::io::Read;
 use std::net::UdpSocket;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +41,9 @@ use std::time::Duration;
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
 
+// EDGE COUNTER
+static mut E2FRAME_DATA: Vec<i8> = vec![];
+const E2FRAME_DATA_MAX_SIZE: usize = 5;
 // #[derive(Debug, Serialize, Deserialize)]
 // enum Value {
 //     Null,
@@ -360,13 +363,14 @@ fn main() {
 }
 
 fn debug(msg: String) {
-    let debug: bool;
-    unsafe {
-        debug = DEBUG;
-    }
-
-    if debug {
+    if false {
         println!("{}", msg);
+    }
+}
+
+fn info(msg: String) {
+    if true {
+        println!("\nINFO: {}\n", msg);
     }
 }
 
@@ -404,6 +408,14 @@ fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String) {
             .publish(topic, QoS::AtLeastOnce, false, json.as_bytes())
             .unwrap();
     });
+}
+
+fn process_temperature(temperature: i8) -> bool {
+    unsafe { E2FRAME_DATA.push(temperature) };
+    if unsafe { E2FRAME_DATA.len() } >= E2FRAME_DATA_MAX_SIZE {
+        return true;
+    }
+    return false;
 }
 
 fn forward(
@@ -444,6 +456,7 @@ fn forward(
 
     let mut client_map = HashMap::new();
     let mut buf = [0; 64 * 1024];
+
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
 
@@ -534,6 +547,7 @@ fn forward(
             let to_send = buf[..num_bytes].to_vec();
 
             let mut will_send = true;
+            let mut edge_send = false;
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
                 0 => {
@@ -594,10 +608,8 @@ fn forward(
                                     fwinfo.end_addr.clone(),
                                 ) || fwinfo.dev_addrs.contains(&dev_addr)
                                 {
-                                    // process_packet(dev_addr, phy);
                                     match dev_addr {
                                         0x001AED84 => {
-                                            debug(format!("Processing Packet"));
                                             let app_s_key: AES128 = AES128::from([
                                                 0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
                                                 0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
@@ -616,12 +628,19 @@ fn forward(
                                                 lorawan_encoding::parser::FRMPayload::Data(
                                                     frame_payload,
                                                 ) => {
-                                                    debug(format!(
-                                                        "Decoded Packet: {:?}",
-                                                        frame_payload
-                                                    ));
+                                                    if frame_payload.len() > 0 {
+                                                        let temperature: i8 =
+                                                            frame_payload[0].try_into().unwrap();
+                                                        info(format!(
+                                                            "TEMPERATURE: {:?}",
+                                                            temperature
+                                                        ));
+                                                        edge_send =
+                                                            process_temperature(temperature);
+                                                        will_send = false;
+                                                    }
                                                 }
-                                                _ => debug(format!("NO BENE")),
+                                                _ => info(format!("NO BENE")),
                                             };
                                         }
                                         _ => {
@@ -706,6 +725,24 @@ fn forward(
                 _ => (),
             }
 
+            if edge_send {
+                let mut temp_sum: i32 = 0;
+                let mut array_str = format!("[");
+                for temp in unsafe { E2FRAME_DATA.iter() } {
+                    temp_sum += i32::from(*temp);
+                    array_str += &format!("{}, ", temp);
+                }
+                array_str += "]";
+                let temp_avg: i32 = temp_sum / unsafe { E2FRAME_DATA.len() } as i32;
+
+                info(format!(
+                    "Average Temp to Send: {}, from {}",
+                    temp_avg, array_str
+                ));
+
+                // Clean up E2DATA_FRAME
+                unsafe { E2FRAME_DATA = vec![] };
+            }
             if will_send {
                 match sender.send(to_send.to_vec().clone()) {
                     Ok(_) => {
