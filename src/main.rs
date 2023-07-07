@@ -44,6 +44,15 @@ static mut DEBUG: bool = false;
 // EDGE COUNTER
 static mut E2FRAME_DATA: Vec<i8> = vec![];
 const E2FRAME_DATA_MAX_SIZE: usize = 5;
+
+// Edge2LoRa RPC
+use edge2lora_rpc::edge2_lora_rpc_service_client::Edge2LoraRpcServiceClient;
+use edge2lora_rpc::NewDataRequest;
+
+pub mod edge2lora_rpc {
+    tonic::include_proto!("edge2lorarpcservice");
+}
+
 // #[derive(Debug, Serialize, Deserialize)]
 // enum Value {
 //     Null,
@@ -245,7 +254,8 @@ fn initialize_mqtt(url: &String, port: u16, topic: &String) -> Client {
     return mqtt_client;
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     let env_variables = charge_environment_variables();
     let mqtt_variables = charge_mqtt_variables();
@@ -350,7 +360,7 @@ fn main() {
                 .unwrap()]
         );
     }
-    // zmq::init_zmq();
+
     forward(
         &bind_addr,
         local_port,
@@ -359,7 +369,9 @@ fn main() {
         fwinfo,
         mqtt_client,
         mqtt_variables.broker_topic,
-    );
+    )
+    .await?;
+    Ok(())
 }
 
 fn debug(msg: String) {
@@ -418,15 +430,15 @@ fn process_temperature(temperature: i8) -> bool {
     return false;
 }
 
-fn forward(
+async fn forward(
     bind_addr: &str,
     local_port: i32,
     remote_host: &str,
     remote_port: u16,
-    fwinfo: ForwardInfo,
+    fwinfo: ForwardInfo<'_>,
     mqtt_client: Option<Client>,
     topic: String,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
     let mut idx: u64 = 0;
@@ -456,6 +468,10 @@ fn forward(
 
     let mut client_map = HashMap::new();
     let mut buf = [0; 64 * 1024];
+    // Init Edge2LoRa RPC CLient
+    info(format!("Initializing Edge2LoRa RPC Client"));
+    let mut e2l_rpc_client =
+        Edge2LoraRpcServiceClient::connect("http://lord-commander:50051").await?;
 
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
@@ -739,6 +755,14 @@ fn forward(
                     "Average Temp to Send: {}, from {}",
                     temp_avg, array_str
                 ));
+                let request = tonic::Request::new(NewDataRequest {
+                    name: "Hello, World!".into(),
+                });
+
+                println!("Sending request: {:?}", request);
+                let response = e2l_rpc_client.new_data(request).await?;
+
+                println!("RESPONSE={:?}", response);
 
                 // Clean up E2DATA_FRAME
                 unsafe { E2FRAME_DATA = vec![] };

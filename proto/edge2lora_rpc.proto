@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package edge2lorarpcservice;
+
+service Edge2LoraRPCService {
+    rpc new_data (NewDataRequest) returns (NewDataResponse);
+}
+
+message NewDataRequest {
+   string name = 1;
+}
+
+message NewDataResponse {
+    string message = 1;
+}
