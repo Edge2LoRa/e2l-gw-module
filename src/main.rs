@@ -473,7 +473,8 @@ async fn forward(
     // Init Edge2LoRa RPC CLient
     info(format!("Initializing Edge2LoRa RPC Client"));
     let mut e2l_rpc_client =
-        Edge2LoraRpcServiceClient::connect("http://lord-commander:50051").await?;
+        Edge2LoraRpcServiceClient::connect("http://192.168.1.161:50051").await?;
+    info(format!("Initialized Edge2LoRa RPC Client"));
 
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
