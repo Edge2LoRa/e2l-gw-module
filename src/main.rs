@@ -38,6 +38,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
 
@@ -755,10 +757,15 @@ async fn forward(
                     "Average Temp to Send: {}, from {}",
                     temp_avg, array_str
                 ));
+                let start = SystemTime::now();
+                let since_the_epoch = start
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time went backwards");
+
                 let request = tonic::Request::new(NewDataRequest {
                     name: "Hello, World!".into(),
+                    timetag: since_the_epoch.as_millis() as u64,
                 });
-
                 println!("Sending request: {:?}", request);
                 let response = e2l_rpc_client.new_data(request).await?;
 
