@@ -1,3 +1,4 @@
+mod e2gw_rpc_client;
 mod json_structs;
 mod lorawan_structs;
 mod mqtt_client;
@@ -14,6 +15,10 @@ extern crate rumqttc;
 extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
+
+// E2L
+use crate::e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
 use lorawan_encoding::keys::AES128;
@@ -46,14 +51,6 @@ static mut DEBUG: bool = false;
 // EDGE COUNTER
 static mut E2FRAME_DATA: Vec<i8> = vec![];
 const E2FRAME_DATA_MAX_SIZE: usize = 5;
-
-// Edge2LoRa RPC
-use edge2lora_rpc::edge2_lora_rpc_service_client::Edge2LoraRpcServiceClient;
-use edge2lora_rpc::NewDataRequest;
-
-pub mod edge2lora_rpc {
-    tonic::include_proto!("edge2lorarpcservice");
-}
 
 // #[derive(Debug, Serialize, Deserialize)]
 // enum Value {
@@ -441,6 +438,13 @@ async fn forward(
     mqtt_client: Option<Client>,
     topic: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // INIT RPC CLIENT
+    let rpc_remote_host = "192.168.1.160";
+    let rpc_remote_port = "50051";
+    let mut rpc_client =
+        init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
+    // Ok(rpc_client);
+
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
     let mut idx: u64 = 0;
@@ -470,11 +474,6 @@ async fn forward(
 
     let mut client_map = HashMap::new();
     let mut buf = [0; 64 * 1024];
-    // Init Edge2LoRa RPC CLient
-    info(format!("Initializing Edge2LoRa RPC Client"));
-    let mut e2l_rpc_client =
-        Edge2LoraRpcServiceClient::connect("http://192.168.1.161:50051").await?;
-    info(format!("Initialized Edge2LoRa RPC Client"));
 
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
@@ -768,7 +767,7 @@ async fn forward(
                     timetag: since_the_epoch.as_millis() as u64,
                 });
                 println!("Sending request: {:?}", request);
-                let response = e2l_rpc_client.new_data(request).await?;
+                let response = rpc_client.new_data(request).await?;
 
                 println!("RESPONSE={:?}", response);
 

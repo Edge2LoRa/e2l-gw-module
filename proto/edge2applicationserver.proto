@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package edge2applicationserver;
+
+service Edge2ApplicationServer {
+    rpc new_data (NewDataRequest) returns (NewDataResponse);
+
+    rpc store_e2gw_pub_info (e2gw_pub_info) returns (ResponseMessage);
+}
+
+message ResponseMessage {
+    sint32 status_code = 1;
+    string message = 2;
+}
+
+message e2gw_pub_info {
+    string gw_ip_addr = 1;
+    string e2gw_pub_key = 2;
+}
+
+message NewDataRequest {
+   string name = 1;
+   uint64 timetag = 2;
+}
+
+message NewDataResponse {
+    string message = 1;
+}
