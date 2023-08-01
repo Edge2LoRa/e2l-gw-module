@@ -16,6 +16,7 @@ extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
 
+extern crate local_ip_address;
 // extern crate elliptic_curve;
 extern crate p256;
 
@@ -447,6 +448,10 @@ async fn forward(
     mqtt_client: Option<Client>,
     topic: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // GET IP ADDRESS
+    let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
+    let gw_rpc_endpoint_port = format!("50051");
+
     // INIT RPC CLIENT
     let rpc_remote_host = "192.168.1.160";
     let rpc_remote_port = "50051";
@@ -460,7 +465,8 @@ async fn forward(
     let public_key_sec1_bytes = public_key.to_sec1_bytes();
 
     let request = tonic::Request::new(E2gwPubInfo {
-        gw_ip_addr: "Hello, World!".into(),
+        gw_ip_addr: gw_rpc_endpoint_address,
+        gw_port: gw_rpc_endpoint_port,
         e2gw_pub_key: public_key_sec1_bytes.into_vec(),
     });
     let response = rpc_client.store_e2gw_pub_info(request).await?;
@@ -472,7 +478,6 @@ async fn forward(
     let as_pub_key_sec1_bytes = response.get_ref().message.clone();
     let as_pub_key: P256PublicKey<p256::NistP256> =
         P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
-    println!("AS PUB KEY={:?}", as_pub_key);
 
     let shared_secret =
         p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
@@ -485,8 +490,8 @@ async fn forward(
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
     let mut idx: u64 = 0;
-    println!("Listening on {}", local.local_addr().unwrap());
-    println!("Forwarding to {}:{}", remote_host, remote_port);
+    info(format!("Listening on {}", local.local_addr().unwrap()));
+    info(format!("Forwarding to {}:{}", remote_host, remote_port));
 
     let remote_addr = format!("{}:{}", remote_host, remote_port);
 
