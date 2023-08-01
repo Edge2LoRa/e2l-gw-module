@@ -5,17 +5,17 @@ package edge2applicationserver;
 service Edge2ApplicationServer {
     rpc new_data (NewDataRequest) returns (NewDataResponse);
 
-    rpc store_e2gw_pub_info (e2gw_pub_info) returns (ResponseMessage);
+    rpc store_e2gw_pub_info (E2GWPubInfo) returns (ResponseMessage);
 }
 
 message ResponseMessage {
     sint32 status_code = 1;
-    string message = 2;
+    bytes message = 2;
 }
 
-message e2gw_pub_info {
+message E2GWPubInfo {
     string gw_ip_addr = 1;
-    string e2gw_pub_key = 2;
+    bytes e2gw_pub_key = 2;
 }
 
 message NewDataRequest {

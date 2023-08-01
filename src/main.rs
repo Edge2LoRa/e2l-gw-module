@@ -16,9 +16,18 @@ extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
 
+// extern crate elliptic_curve;
+extern crate p256;
+
 // E2L
-use crate::e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
+
+// ECC
+use p256::elliptic_curve::rand_core::OsRng;
+use p256::elliptic_curve::PublicKey as P256PublicKey;
+use p256::elliptic_curve::SecretKey as P256SecretKey;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
 use lorawan_encoding::keys::AES128;
@@ -443,7 +452,35 @@ async fn forward(
     let rpc_remote_port = "50051";
     let mut rpc_client =
         init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
+
+    // Compute private ECC key
+    let private_key: P256SecretKey<p256::NistP256> = P256SecretKey::random(&mut OsRng);
+    let public_key: P256PublicKey<p256::NistP256> = private_key.public_key();
+    // Get sec1 bytes of Public Key (TO SEND TO AS)
+    let public_key_sec1_bytes = public_key.to_sec1_bytes();
+
+    let request = tonic::Request::new(E2gwPubInfo {
+        gw_ip_addr: "Hello, World!".into(),
+        e2gw_pub_key: public_key_sec1_bytes.into_vec(),
+    });
+    let response = rpc_client.store_e2gw_pub_info(request).await?;
+
+    let status_code = response.get_ref().status_code;
+    if status_code < 200 || status_code > 299 {
+        return Err("Unable to store public key".into());
+    }
+    let as_pub_key_sec1_bytes = response.get_ref().message.clone();
+    let as_pub_key: P256PublicKey<p256::NistP256> =
+        P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
+    println!("AS PUB KEY={:?}", as_pub_key);
+
+    let shared_secret =
+        p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
     // Ok(rpc_client);
+    info(format!(
+        "Shared secret: {:?}",
+        shared_secret.raw_secret_bytes()
+    ));
 
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
