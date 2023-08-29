@@ -464,28 +464,28 @@ async fn forward(
     // Get sec1 bytes of Public Key (TO SEND TO AS)
     let public_key_sec1_bytes = public_key.to_sec1_bytes();
 
-    let request = tonic::Request::new(E2gwPubInfo {
+    let _request = tonic::Request::new(E2gwPubInfo {
         gw_ip_addr: gw_rpc_endpoint_address,
         gw_port: gw_rpc_endpoint_port,
         e2gw_pub_key: public_key_sec1_bytes.into_vec(),
     });
-    let response = rpc_client.store_e2gw_pub_info(request).await?;
+    // let response = rpc_client.store_e2gw_pub_info(request).await?;
 
-    let status_code = response.get_ref().status_code;
-    if status_code < 200 || status_code > 299 {
-        return Err("Unable to store public key".into());
-    }
-    let as_pub_key_sec1_bytes = response.get_ref().message.clone();
-    let as_pub_key: P256PublicKey<p256::NistP256> =
-        P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
+    // let status_code = response.get_ref().status_code;
+    // if status_code < 200 || status_code > 299 {
+    //     return Err("Unable to store public key".into());
+    // }
+    // let as_pub_key_sec1_bytes = response.get_ref().message.clone();
+    // let as_pub_key: P256PublicKey<p256::NistP256> =
+    //     P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
 
-    let shared_secret =
-        p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
-    // Ok(rpc_client);
-    info(format!(
-        "Shared secret: {:?}",
-        shared_secret.raw_secret_bytes()
-    ));
+    // let shared_secret =
+    //     p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
+    // // Ok(rpc_client);
+    // info(format!(
+    //     "Shared secret: {:?}",
+    //     shared_secret.raw_secret_bytes()
+    // ));
 
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
@@ -669,7 +669,7 @@ async fn forward(
                                 ) || fwinfo.dev_addrs.contains(&dev_addr)
                                 {
                                     match dev_addr {
-                                        0x001AED84 => {
+                                        0x001AED81 => {
                                             let app_s_key: AES128 = AES128::from([
                                                 0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
                                                 0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
@@ -700,7 +700,7 @@ async fn forward(
                                                         will_send = false;
                                                     }
                                                 }
-                                                _ => info(format!("NO BENE")),
+                                                _ => info(format!("Failed to decrypt packet")),
                                             };
                                         }
                                         _ => {
