@@ -29,6 +29,7 @@ use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
 
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
+
 // ECC
 use p256::elliptic_curve::rand_core::OsRng;
 use p256::elliptic_curve::PublicKey as P256PublicKey;
@@ -444,6 +445,18 @@ fn process_temperature(temperature: i8) -> bool {
     return false;
 }
 
+fn start_rpc_server(rpc_endpoint: String) {
+    let rpc_server: MyEdge2GatewayServer = MyEdge2GatewayServer::default();
+    info(format!("RPC Server started at {}", rpc_endpoint));
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
+    let server_future = Server::builder()
+        .add_service(Edge2GatewayServer::new(rpc_server))
+        .serve(rpc_endpoint.parse().unwrap());
+    rt.block_on(server_future)
+        .expect("RPC Server failed to start");
+}
+
 async fn forward(
     bind_addr: &str,
     local_port: i32,
@@ -456,6 +469,10 @@ async fn forward(
     // GET IP ADDRESS
     let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
     let gw_rpc_endpoint_port = format!("50052");
+    let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
+
+    // INIT RPC SERVER
+    thread::spawn(|| start_rpc_server(rpc_endpoint));
 
     // INIT RPC CLIENT
     let rpc_remote_host = "192.168.1.160";
@@ -480,19 +497,6 @@ async fn forward(
         return Err("Unable to store public key".into());
     }
 
-    // INIT RPC SERVER
-    let addr = format!(
-        "{}:{}",
-        gw_rpc_endpoint_address.clone(),
-        gw_rpc_endpoint_port.clone()
-    )
-    .parse()?;
-    let rpc_server: MyEdge2GatewayServer = MyEdge2GatewayServer::default();
-
-    Server::builder()
-        .add_service(Edge2GatewayServer::new(rpc_server))
-        .serve(addr)
-        .await?;
     // let as_pub_key_sec1_bytes = response.get_ref().message.clone();
     // let as_pub_key: P256PublicKey<p256::NistP256> =
     //     P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
