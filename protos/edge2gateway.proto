@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package edge2gateway;
+
+service Edge2Gateway {
+    rpc handle_ed_pub_info (EdPubInfo) returns (GwInfo);
+
+}
+
+message EdPubInfo {
+    bytes dev_eui = 1;
+    bytes dev_addr = 2;
+    bytes g_as_ed = 3;
+    bytes dev_public_key = 4;
+}
+
+message GwInfo {
+    sint32 status_code = 1;
+    bytes g_gw_ed = 2;
+}

@@ -1,4 +1,5 @@
 mod e2gw_rpc_client;
+mod e2gw_rpc_server;
 mod json_structs;
 mod lorawan_structs;
 mod mqtt_client;
@@ -25,6 +26,9 @@ use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
 
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
+
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
 // ECC
 use p256::elliptic_curve::rand_core::OsRng;
 use p256::elliptic_curve::PublicKey as P256PublicKey;
@@ -44,6 +48,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::fmt::{self};
+use tonic::transport::Server;
 // use std::io::Read;
 use std::net::UdpSocket;
 use std::str;
@@ -450,7 +455,7 @@ async fn forward(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GET IP ADDRESS
     let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
-    let gw_rpc_endpoint_port = format!("50051");
+    let gw_rpc_endpoint_port = format!("50052");
 
     // INIT RPC CLIENT
     let rpc_remote_host = "192.168.1.160";
@@ -464,17 +469,30 @@ async fn forward(
     // Get sec1 bytes of Public Key (TO SEND TO AS)
     let public_key_sec1_bytes = public_key.to_sec1_bytes();
 
-    let _request = tonic::Request::new(E2gwPubInfo {
-        gw_ip_addr: gw_rpc_endpoint_address,
-        gw_port: gw_rpc_endpoint_port,
+    let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
+        gw_ip_addr: gw_rpc_endpoint_address.clone(),
+        gw_port: gw_rpc_endpoint_port.clone(),
         e2gw_pub_key: public_key_sec1_bytes.into_vec(),
     });
-    // let response = rpc_client.store_e2gw_pub_info(request).await?;
+    let response = rpc_client.store_e2gw_pub_info(request).await?;
+    let status_code = response.get_ref().status_code;
+    if status_code < 200 || status_code > 299 {
+        return Err("Unable to store public key".into());
+    }
 
-    // let status_code = response.get_ref().status_code;
-    // if status_code < 200 || status_code > 299 {
-    //     return Err("Unable to store public key".into());
-    // }
+    // INIT RPC SERVER
+    let addr = format!(
+        "{}:{}",
+        gw_rpc_endpoint_address.clone(),
+        gw_rpc_endpoint_port.clone()
+    )
+    .parse()?;
+    let rpc_server: MyEdge2GatewayServer = MyEdge2GatewayServer::default();
+
+    Server::builder()
+        .add_service(Edge2GatewayServer::new(rpc_server))
+        .serve(addr)
+        .await?;
     // let as_pub_key_sec1_bytes = response.get_ref().message.clone();
     // let as_pub_key: P256PublicKey<p256::NistP256> =
     //     P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
@@ -668,6 +686,7 @@ async fn forward(
                                     fwinfo.end_addr.clone(),
                                 ) || fwinfo.dev_addrs.contains(&dev_addr)
                                 {
+                                    // Check if enabled E2ED
                                     match dev_addr {
                                         0x001AED81 => {
                                             let app_s_key: AES128 = AES128::from([
