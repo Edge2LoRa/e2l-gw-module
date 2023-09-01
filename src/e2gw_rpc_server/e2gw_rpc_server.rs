@@ -1,4 +1,5 @@
 pub(crate) mod e2gw_rpc_server {
+    extern crate p256;
     use tonic::{Request, Response, Status};
 
     use self::edge2_gateway_server::Edge2Gateway;
@@ -16,6 +17,11 @@ pub(crate) mod e2gw_rpc_server {
             request: Request<EdPubInfo>,
         ) -> Result<Response<GwInfo>, Status> {
             println!("Got a request: {:?}", request);
+            let inner_request = request.into_inner();
+            let _dev_eui = inner_request.dev_eui;
+            let _dev_addr = inner_request.dev_addr;
+            let _g_as_ed = inner_request.g_as_ed;
+            let _dev_public_key = inner_request.dev_public_key;
             let reply = GwInfo {
                 status_code: 0,
                 g_gw_ed: "aa".into(),
