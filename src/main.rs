@@ -1,5 +1,6 @@
 mod e2gw_rpc_client;
 mod e2gw_rpc_server;
+mod e2l_crypto;
 mod json_structs;
 mod lorawan_structs;
 mod mqtt_client;
@@ -26,14 +27,10 @@ use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
 
-use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
-
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
-
-// ECC
-use p256::elliptic_curve::rand_core::OsRng;
-use p256::elliptic_curve::PublicKey as P256PublicKey;
-use p256::elliptic_curve::SecretKey as P256SecretKey;
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
+use e2l_crypto::e2l_crypto::e2l_crypto::E2LCrypto;
+use tonic::transport::Server;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
 use lorawan_encoding::keys::AES128;
@@ -49,7 +46,6 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::fmt::{self};
-use tonic::transport::Server;
 // use std::io::Read;
 use std::net::UdpSocket;
 use std::str;
@@ -67,16 +63,7 @@ static mut DEBUG: bool = false;
 // EDGE COUNTER
 static mut E2FRAME_DATA: Vec<i8> = vec![];
 const E2FRAME_DATA_MAX_SIZE: usize = 5;
-
-// #[derive(Debug, Serialize, Deserialize)]
-// enum Value {
-//     Null,
-//     Bool(bool),
-//     Number(Number),
-//     String(String),
-//     Array(Vec<Value>),
-//     HashSet(HashSet<String, Value>),
-// }
+use e2l_crypto::e2l_crypto::E2L_CRYPTO;
 
 lazy_static! {
     static ref PACKETNAMES: HashMap<u8, &'static str> = {
@@ -445,18 +432,6 @@ fn process_temperature(temperature: i8) -> bool {
     return false;
 }
 
-fn start_rpc_server(rpc_endpoint: String) {
-    let rpc_server: MyEdge2GatewayServer = MyEdge2GatewayServer::default();
-    info(format!("RPC Server started at {}", rpc_endpoint));
-
-    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
-    let server_future = Server::builder()
-        .add_service(Edge2GatewayServer::new(rpc_server))
-        .serve(rpc_endpoint.parse().unwrap());
-    rt.block_on(server_future)
-        .expect("RPC Server failed to start");
-}
-
 async fn forward(
     bind_addr: &str,
     local_port: i32,
@@ -471,31 +446,38 @@ async fn forward(
     let gw_rpc_endpoint_port = format!("50052");
     let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
 
-    // INIT RPC SERVER
-    thread::spawn(|| start_rpc_server(rpc_endpoint));
-
     // INIT RPC CLIENT
     let rpc_remote_host = "192.168.1.160";
     let rpc_remote_port = "50051";
     let mut rpc_client =
         init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
 
+    // INIT RPC SERVER
+    let rpc_server = MyEdge2GatewayServer {};
     // Compute private ECC key
-    let private_key: P256SecretKey<p256::NistP256> = P256SecretKey::random(&mut OsRng);
-    let public_key: P256PublicKey<p256::NistP256> = private_key.public_key();
-    // Get sec1 bytes of Public Key (TO SEND TO AS)
-    let public_key_sec1_bytes = public_key.to_sec1_bytes();
+    let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
     let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
         gw_ip_addr: gw_rpc_endpoint_address.clone(),
         gw_port: gw_rpc_endpoint_port.clone(),
-        e2gw_pub_key: public_key_sec1_bytes.into_vec(),
+        e2gw_pub_key: compressed_public_key.into_vec(),
     });
     let response = rpc_client.store_e2gw_pub_info(request).await?;
     let status_code = response.get_ref().status_code;
     if status_code < 200 || status_code > 299 {
-        return Err("Unable to store public key".into());
+        return Err("Unable to send public key to the AS".into());
     }
+
+    // let rpc_server = rpc_server_ptr;
+    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
+    info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
+    let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
+
+    thread::spawn(move || {
+        let server_future = servicer.serve(rpc_endpoint.parse().unwrap());
+        rt.block_on(server_future)
+            .expect("RPC Server failed to start");
+    });
 
     // let as_pub_key_sec1_bytes = response.get_ref().message.clone();
     // let as_pub_key: P256PublicKey<p256::NistP256> =
