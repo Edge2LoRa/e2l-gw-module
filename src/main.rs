@@ -25,15 +25,12 @@ extern crate p256;
 // E2L
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
-use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
 
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
-use e2l_crypto::e2l_crypto::e2l_crypto::E2LCrypto;
 use tonic::transport::Server;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
-use lorawan_encoding::keys::AES128;
 use lorawan_encoding::parser::{
     parse, AsPhyPayloadBytes, DataHeader, DataPayload, MHDRAble, MType, PhyPayload,
 };
@@ -54,8 +51,6 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
@@ -611,7 +606,6 @@ async fn forward(
             let to_send = buf[..num_bytes].to_vec();
 
             let mut will_send = true;
-            let mut edge_send = false;
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
                 0 => {
@@ -666,59 +660,79 @@ async fn forward(
                                         json_to_send,
                                     );
                                 };
-                                if check_range(
-                                    dev_addr,
-                                    fwinfo.start_addr.clone(),
-                                    fwinfo.end_addr.clone(),
-                                ) || fwinfo.dev_addrs.contains(&dev_addr)
+                                if true
+                                    || check_range(
+                                        dev_addr,
+                                        fwinfo.start_addr.clone(),
+                                        fwinfo.end_addr.clone(),
+                                    )
+                                    || fwinfo.dev_addrs.contains(&dev_addr)
                                 {
                                     // Check if enabled E2ED
-                                    match dev_addr {
-                                        0x001AED81 => {
-                                            let app_s_key: AES128 = AES128::from([
-                                                0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
-                                                0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
-                                            ]);
-                                            let decrypted_data_payload = phy
-                                                .decrypt(
-                                                    Some(&app_s_key),
-                                                    Some(&app_s_key),
-                                                    fcnt.into(),
-                                                )
-                                                .unwrap();
-                                            debug(format!("Decrypted Packet"));
-                                            let frame_payload_result =
-                                                decrypted_data_payload.frm_payload().unwrap();
-                                            match frame_payload_result {
-                                                lorawan_encoding::parser::FRMPayload::Data(
-                                                    frame_payload,
-                                                ) => {
-                                                    if frame_payload.len() > 0 {
-                                                        let temperature: i8 =
-                                                            frame_payload[0].try_into().unwrap();
-                                                        info(format!(
-                                                            "TEMPERATURE: {:?}",
-                                                            temperature
-                                                        ));
-                                                        edge_send =
-                                                            process_temperature(temperature);
-                                                        will_send = false;
-                                                    }
-                                                }
-                                                _ => info(format!("Failed to decrypt packet")),
-                                            };
-                                        }
-                                        _ => {
-                                            match fwinfo.forward_protocol {
-                                                ForwardProtocols::UDP => {
-                                                    debug(format!(
-                                                        "Forwarding to {:x?}",
-                                                        fwinfo.forward_host
-                                                    ));
-                                                } // _ => panic!("Forwarding protocol not implemented!"),
+                                    let e2ed_enabled: bool;
+                                    unsafe {
+                                        e2ed_enabled = E2L_CRYPTO
+                                            .check_e2ed_enabled(dev_addr.clone().to_string());
+                                    }
+                                    if e2ed_enabled {
+                                        unsafe {
+                                            let ret = E2L_CRYPTO.process_frame(
+                                                dev_addr.to_string(),
+                                                fcnt,
+                                                phy,
+                                            );
+                                            if ret < 0 {
+                                                info(format!("Failed to process payload for device {:x?} with error code {}", dev_addr, ret));
                                             }
+                                        };
+                                        will_send = false;
+                                    } else {
+                                        match fwinfo.forward_protocol {
+                                            ForwardProtocols::UDP => {
+                                                debug(format!(
+                                                    "Forwarding to {:x?}",
+                                                    fwinfo.forward_host
+                                                ));
+                                            } // _ => panic!("Forwarding protocol not implemented!"),
                                         }
                                     }
+                                    // match dev_addr {
+                                    //     0x001AED81 => {
+                                    //         let app_s_key: AES128 = AES128::from([
+                                    //             0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
+                                    //             0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
+                                    //         ]);
+                                    //         let decrypted_data_payload = phy
+                                    //             .decrypt(
+                                    //                 Some(&app_s_key),
+                                    //                 Some(&app_s_key),
+                                    //                 fcnt.into(),
+                                    //             )
+                                    //             .unwrap();
+                                    //         debug(format!("Decrypted Packet"));
+                                    //         let frame_payload_result =
+                                    //             decrypted_data_payload.frm_payload().unwrap();
+                                    //         match frame_payload_result {
+                                    //             lorawan_encoding::parser::FRMPayload::Data(
+                                    //                 frame_payload,
+                                    //             ) => {
+                                    //                 if frame_payload.len() > 0 {
+                                    //                     let temperature: i8 =
+                                    //                         frame_payload[0].try_into().unwrap();
+                                    //                     info(format!(
+                                    //                         "TEMPERATURE: {:?}",
+                                    //                         temperature
+                                    //                     ));
+                                    //                     edge_send =
+                                    //                         process_temperature(temperature);
+                                    //                     will_send = false;
+                                    //                 }
+                                    //             }
+                                    //             _ => info(format!("Failed to decrypt packet")),
+                                    //         };
+                                    //     }
+                                    //     _ => {}
+                                    // }
                                 } else {
                                     debug(format!(
                                         "Not forwarding packet from client {} to upstream server",
@@ -751,11 +765,13 @@ async fn forward(
                                         json_to_send,
                                     );
                                 };
-                                if !check_range(
-                                    dev_eui,
-                                    fwinfo.start_filter_deveui.clone(),
-                                    fwinfo.end_filter_deveui.clone(),
-                                ) {
+                                if true
+                                    || !check_range(
+                                        dev_eui,
+                                        fwinfo.start_filter_deveui.clone(),
+                                        fwinfo.end_filter_deveui.clone(),
+                                    )
+                                {
                                     match fwinfo.forward_protocol {
                                         ForwardProtocols::UDP => {
                                             debug(format!(
@@ -790,37 +806,38 @@ async fn forward(
                 _ => (),
             }
 
-            if edge_send {
-                let mut temp_sum: i32 = 0;
-                let mut array_str = format!("[");
-                for temp in unsafe { E2FRAME_DATA.iter() } {
-                    temp_sum += i32::from(*temp);
-                    array_str += &format!("{}, ", temp);
-                }
-                array_str += "]";
-                let temp_avg: i32 = temp_sum / unsafe { E2FRAME_DATA.len() } as i32;
+            // if edge_send {
+            //     info(format!("EDGE FRAME!"))
+            // let mut temp_sum: i32 = 0;
+            // let mut array_str = format!("[");
+            // for temp in unsafe { E2FRAME_DATA.iter() } {
+            //     temp_sum += i32::from(*temp);
+            //     array_str += &format!("{}, ", temp);
+            // }
+            // array_str += "]";
+            // let temp_avg: i32 = temp_sum / unsafe { E2FRAME_DATA.len() } as i32;
 
-                info(format!(
-                    "Average Temp to Send: {}, from {}",
-                    temp_avg, array_str
-                ));
-                let start = SystemTime::now();
-                let since_the_epoch = start
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards");
+            // info(format!(
+            //     "Average Temp to Send: {}, from {}",
+            //     temp_avg, array_str
+            // ));
+            // let start = SystemTime::now();
+            // let since_the_epoch = start
+            //     .duration_since(UNIX_EPOCH)
+            //     .expect("Time went backwards");
 
-                let request = tonic::Request::new(NewDataRequest {
-                    name: "Hello, World!".into(),
-                    timetag: since_the_epoch.as_millis() as u64,
-                });
-                println!("Sending request: {:?}", request);
-                let response = rpc_client.new_data(request).await?;
+            // let request = tonic::Request::new(NewDataRequest {
+            //     name: "Hello, World!".into(),
+            //     timetag: since_the_epoch.as_millis() as u64,
+            // });
+            // println!("Sending request: {:?}", request);
+            // let response = rpc_client.new_data(request).await?;
 
-                println!("RESPONSE={:?}", response);
+            // println!("RESPONSE={:?}", response);
 
-                // Clean up E2DATA_FRAME
-                unsafe { E2FRAME_DATA = vec![] };
-            }
+            // // Clean up E2DATA_FRAME
+            // unsafe { E2FRAME_DATA = vec![] };
+            // }
             if will_send {
                 match sender.send(to_send.to_vec().clone()) {
                     Ok(_) => {

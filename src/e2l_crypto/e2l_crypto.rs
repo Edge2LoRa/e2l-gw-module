@@ -1,22 +1,24 @@
-use std::collections::HashMap;
-
 use self::e2l_crypto::E2LCrypto;
 pub(crate) mod e2l_crypto {
-    use std::collections::HashMap;
     // Crypto
     extern crate p256;
 
     use crate::info;
+    use lorawan_encoding::default_crypto::DefaultFactory;
+    use lorawan_encoding::keys::AES128;
+    use lorawan_encoding::parser::EncryptedDataPayload;
     use p256::elliptic_curve::ecdh::SharedSecret as P256SharedSecret;
     use p256::elliptic_curve::rand_core::OsRng;
     use p256::elliptic_curve::PublicKey as P256PublicKey;
     use p256::elliptic_curve::SecretKey as P256SecretKey;
+    use sha256::digest;
 
     pub struct DevInfo {
         dev_eui: String,
         dev_addr: String,
         dev_public_key: P256PublicKey<p256::NistP256>,
-        edge_s_key: P256SharedSecret<p256::NistP256>,
+        edge_s_enc_key: AES128,
+        edge_s_int_key: AES128,
     }
 
     #[derive(Default)]
@@ -28,6 +30,26 @@ pub(crate) mod e2l_crypto {
     }
 
     impl E2LCrypto {
+        /*
+           @brief: This function computes the private/public ecc key pair of the GW
+           @return: the compressed public key of the GW to be sent to the AS
+        */
+        pub fn generate_ecc_keys(&mut self) -> Box<[u8]> {
+            self.private_key = Some(P256SecretKey::random(&mut OsRng));
+            self.public_key = Some(self.private_key.clone().unwrap().public_key());
+            // Get sec1 bytes of Public Key (TO SEND TO AS)
+            self.compressed_public_key = Some(self.public_key.clone().unwrap().to_sec1_bytes());
+            return self.compressed_public_key.clone().unwrap();
+        }
+        /*
+           @brief: This function stores the public info of a dev and computes the g_gw_ed to send to the AS
+           @param dev_eui: the dev_eui of the device
+           @param dev_addr: the dev_addr of the device
+           @param g_as_ed_compressed: the compressed g_as_ed computed by the AS
+           @param dev_public_key_compressed: the compressed public key of the device
+           @return: the g_gw_ed to send to the AS
+        */
+
         pub fn handle_ed_pub_info(
             &mut self,
             dev_eui: String,
@@ -45,14 +67,39 @@ pub(crate) mod e2l_crypto {
                 self.private_key.clone().unwrap().to_nonzero_scalar(),
                 g_as_ed.as_affine(),
             );
-            println!("Secret Key: {:?}", edge_s_key.raw_secret_bytes());
-            let dev_info: DevInfo = DevInfo {
-                dev_eui: dev_eui.clone(),
-                dev_addr: dev_addr.clone(),
-                dev_public_key: dev_public_key.clone(),
-                edge_s_key: edge_s_key,
-            };
-            self.active_directory.push(dev_info);
+            let edge_s_key_bytes: Vec<u8> = edge_s_key.raw_secret_bytes().to_vec();
+            let mut edge_s_enc_key_bytes_before_hash = edge_s_key_bytes.clone();
+            edge_s_enc_key_bytes_before_hash.insert(0, 0);
+            let edge_s_enc_key_bytes = digest(edge_s_enc_key_bytes_before_hash).into_bytes();
+            let aux: [u8; 16] = edge_s_enc_key_bytes.try_into().unwrap();
+            let edge_s_enc_key = AES128::from(aux.clone());
+
+            let mut edge_s_key_int_bytes_before_hash = edge_s_key_bytes.clone();
+            edge_s_key_int_bytes_before_hash.insert(0, 1);
+            let edge_s_key_int_bytes = digest(edge_s_key_int_bytes_before_hash).into_bytes();
+            let aux: [u8; 16] = edge_s_key_int_bytes.try_into().unwrap();
+            let edge_s_int_key = AES128::from(aux.clone());
+
+            let mut dev_info_found = false;
+            for dev_info in self.active_directory.iter_mut() {
+                if dev_info.dev_addr == dev_addr {
+                    dev_info.dev_public_key = dev_public_key.clone();
+                    dev_info.edge_s_enc_key = edge_s_enc_key;
+                    dev_info.edge_s_int_key = edge_s_int_key;
+                    dev_info_found = true;
+                    break;
+                }
+            }
+            if !dev_info_found {
+                let new_dev_info: DevInfo = DevInfo {
+                    dev_eui: dev_eui.clone(),
+                    dev_addr: dev_addr.clone(),
+                    dev_public_key: dev_public_key.clone(),
+                    edge_s_enc_key: edge_s_enc_key,
+                    edge_s_int_key: edge_s_int_key,
+                };
+                self.active_directory.push(new_dev_info);
+            }
 
             let g_gw_ed: P256SharedSecret<p256::NistP256> = p256::ecdh::diffie_hellman(
                 self.private_key.clone().unwrap().to_nonzero_scalar(),
@@ -61,12 +108,58 @@ pub(crate) mod e2l_crypto {
             return g_gw_ed.raw_secret_bytes().to_vec();
         }
 
-        pub fn generate_ecc_keys(&mut self) -> Box<[u8]> {
-            self.private_key = Some(P256SecretKey::random(&mut OsRng));
-            self.public_key = Some(self.private_key.clone().unwrap().public_key());
-            // Get sec1 bytes of Public Key (TO SEND TO AS)
-            self.compressed_public_key = Some(self.public_key.clone().unwrap().to_sec1_bytes());
-            return self.compressed_public_key.clone().unwrap();
+        /*
+            @brief: This function checks if the device is in the active directory
+            @param dev_addr: the dev_addr of the device
+            @return: true if the device is in the active directory, false otherwise
+        */
+        pub fn check_e2ed_enabled(&self, dev_addr: String) -> bool {
+            for dev_info in self.active_directory.iter() {
+                if dev_info.dev_addr == dev_addr {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        pub fn process_frame(
+            &self,
+            dev_addr: String,
+            fcnt: u16,
+            phy: EncryptedDataPayload<Vec<u8>, DefaultFactory>,
+        ) -> i32 {
+            let dev_info: &DevInfo;
+            let mut dev_info_found = false;
+            for dev_info_iter in self.active_directory.iter() {
+                if dev_info_iter.dev_addr == dev_addr {
+                    dev_info = dev_info_iter;
+                    println!("Dev info {}", dev_info.dev_addr);
+                    dev_info_found = true;
+                    // GET KEYS
+                    let edge_s_enc_key: AES128 = dev_info.edge_s_enc_key.clone();
+                    let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
+                    let decrypted_data_payload = phy
+                        .decrypt(Some(&edge_s_enc_key), Some(&edge_s_int_key), fcnt.into())
+                        .unwrap();
+
+                    let frame_payload_result = decrypted_data_payload.frm_payload().unwrap();
+                    match frame_payload_result {
+                        lorawan_encoding::parser::FRMPayload::Data(frame_payload) => {
+                            if frame_payload.len() > 0 {
+                                let temperature: i8 = frame_payload[0].try_into().unwrap();
+                                info(format!("TEMPERATURE: {:?}", temperature));
+                            }
+                        }
+                        _ => println!("Failed to decrypt packet"),
+                    };
+                    break;
+                }
+            }
+            if dev_info_found {
+                return -1;
+            }
+
+            return 0;
         }
     }
 }
