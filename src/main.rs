@@ -55,9 +55,7 @@ use std::time::Duration;
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
 
-// EDGE COUNTER
-static mut E2FRAME_DATA: Vec<i8> = vec![];
-const E2FRAME_DATA_MAX_SIZE: usize = 5;
+// E2L modules
 use e2l_crypto::e2l_crypto::E2L_CRYPTO;
 
 lazy_static! {
@@ -419,14 +417,6 @@ fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String) {
     });
 }
 
-fn process_temperature(temperature: i8) -> bool {
-    unsafe { E2FRAME_DATA.push(temperature) };
-    if unsafe { E2FRAME_DATA.len() } >= E2FRAME_DATA_MAX_SIZE {
-        return true;
-    }
-    return false;
-}
-
 async fn forward(
     bind_addr: &str,
     local_port: i32,
@@ -696,43 +686,6 @@ async fn forward(
                                             } // _ => panic!("Forwarding protocol not implemented!"),
                                         }
                                     }
-                                    // match dev_addr {
-                                    //     0x001AED81 => {
-                                    //         let app_s_key: AES128 = AES128::from([
-                                    //             0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
-                                    //             0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
-                                    //         ]);
-                                    //         let decrypted_data_payload = phy
-                                    //             .decrypt(
-                                    //                 Some(&app_s_key),
-                                    //                 Some(&app_s_key),
-                                    //                 fcnt.into(),
-                                    //             )
-                                    //             .unwrap();
-                                    //         debug(format!("Decrypted Packet"));
-                                    //         let frame_payload_result =
-                                    //             decrypted_data_payload.frm_payload().unwrap();
-                                    //         match frame_payload_result {
-                                    //             lorawan_encoding::parser::FRMPayload::Data(
-                                    //                 frame_payload,
-                                    //             ) => {
-                                    //                 if frame_payload.len() > 0 {
-                                    //                     let temperature: i8 =
-                                    //                         frame_payload[0].try_into().unwrap();
-                                    //                     info(format!(
-                                    //                         "TEMPERATURE: {:?}",
-                                    //                         temperature
-                                    //                     ));
-                                    //                     edge_send =
-                                    //                         process_temperature(temperature);
-                                    //                     will_send = false;
-                                    //                 }
-                                    //             }
-                                    //             _ => info(format!("Failed to decrypt packet")),
-                                    //         };
-                                    //     }
-                                    //     _ => {}
-                                    // }
                                 } else {
                                     debug(format!(
                                         "Not forwarding packet from client {} to upstream server",
@@ -805,39 +758,6 @@ async fn forward(
                 }
                 _ => (),
             }
-
-            // if edge_send {
-            //     info(format!("EDGE FRAME!"))
-            // let mut temp_sum: i32 = 0;
-            // let mut array_str = format!("[");
-            // for temp in unsafe { E2FRAME_DATA.iter() } {
-            //     temp_sum += i32::from(*temp);
-            //     array_str += &format!("{}, ", temp);
-            // }
-            // array_str += "]";
-            // let temp_avg: i32 = temp_sum / unsafe { E2FRAME_DATA.len() } as i32;
-
-            // info(format!(
-            //     "Average Temp to Send: {}, from {}",
-            //     temp_avg, array_str
-            // ));
-            // let start = SystemTime::now();
-            // let since_the_epoch = start
-            //     .duration_since(UNIX_EPOCH)
-            //     .expect("Time went backwards");
-
-            // let request = tonic::Request::new(NewDataRequest {
-            //     name: "Hello, World!".into(),
-            //     timetag: since_the_epoch.as_millis() as u64,
-            // });
-            // println!("Sending request: {:?}", request);
-            // let response = rpc_client.new_data(request).await?;
-
-            // println!("RESPONSE={:?}", response);
-
-            // // Clean up E2DATA_FRAME
-            // unsafe { E2FRAME_DATA = vec![] };
-            // }
             if will_send {
                 match sender.send(to_send.to_vec().clone()) {
                     Ok(_) => {

@@ -16,7 +16,6 @@ pub(crate) mod e2gw_rpc_server {
             &self,
             request: Request<EdPubInfo>,
         ) -> Result<Response<GwInfo>, Status> {
-            println!("Got a request: {:?}", request);
             let inner_request = request.into_inner();
             let dev_eui = inner_request.dev_eui;
             let dev_addr = inner_request.dev_addr;
@@ -29,10 +28,19 @@ pub(crate) mod e2gw_rpc_server {
                     g_as_ed_compressed,
                     dev_public_key_compressed,
                 );
-                let reply = GwInfo {
-                    status_code: 0,
-                    g_gw_ed: g_gw_ed_compressed,
-                };
+                // Check if the result is empty
+                let reply: GwInfo;
+                if g_gw_ed_compressed.is_empty() {
+                    reply = GwInfo {
+                        status_code: -1,
+                        g_gw_ed: g_gw_ed_compressed,
+                    };
+                } else {
+                    reply = GwInfo {
+                        status_code: 0,
+                        g_gw_ed: g_gw_ed_compressed,
+                    };
+                }
                 Ok(Response::new(reply))
             }
         }

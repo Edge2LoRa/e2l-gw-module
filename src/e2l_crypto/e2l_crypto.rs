@@ -3,7 +3,6 @@ pub(crate) mod e2l_crypto {
     // Crypto
     extern crate p256;
 
-    use crate::info;
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
     use lorawan_encoding::parser::EncryptedDataPayload;
@@ -57,28 +56,53 @@ pub(crate) mod e2l_crypto {
             g_as_ed_compressed: Vec<u8>,
             dev_public_key_compressed: Vec<u8>,
         ) -> Vec<u8> {
-            info(format!("Received EdPubInfo"));
-            let g_as_ed: P256PublicKey<p256::NistP256> =
-                P256PublicKey::from_sec1_bytes(&g_as_ed_compressed).unwrap();
-            let dev_public_key: P256PublicKey<p256::NistP256> =
-                P256PublicKey::from_sec1_bytes(&dev_public_key_compressed).unwrap();
+            // GET g_as_ed
+            let aa: [u8; 32] = g_as_ed_compressed.try_into().unwrap();
+            let test_private: P256SecretKey<p256::NistP256> =
+                P256SecretKey::from_bytes(&aa.into()).unwrap();
+            let g_as_ed = test_private.public_key();
 
+            // Get Device public key
+            let dev_public_key_result: Result<
+                P256PublicKey<p256::NistP256>,
+                p256::elliptic_curve::Error,
+            > = P256PublicKey::from_sec1_bytes(&dev_public_key_compressed);
+            let dev_public_key: P256PublicKey<p256::NistP256>;
+            match dev_public_key_result {
+                Ok(x) => {
+                    dev_public_key = x;
+                }
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                    return vec![];
+                }
+            };
+
+            // Compute the Edge Session Key
             let edge_s_key: P256SharedSecret<p256::NistP256> = p256::ecdh::diffie_hellman(
                 self.private_key.clone().unwrap().to_nonzero_scalar(),
                 g_as_ed.as_affine(),
             );
+            println!("\nEdgeSKey: {:?}\n", edge_s_key.raw_secret_bytes());
             let edge_s_key_bytes: Vec<u8> = edge_s_key.raw_secret_bytes().to_vec();
-            let mut edge_s_enc_key_bytes_before_hash = edge_s_key_bytes.clone();
-            edge_s_enc_key_bytes_before_hash.insert(0, 0);
-            let edge_s_enc_key_bytes = digest(edge_s_enc_key_bytes_before_hash).into_bytes();
-            let aux: [u8; 16] = edge_s_enc_key_bytes.try_into().unwrap();
-            let edge_s_enc_key = AES128::from(aux.clone());
 
+            // Compute Edge Session Integrity Key
             let mut edge_s_key_int_bytes_before_hash = edge_s_key_bytes.clone();
             edge_s_key_int_bytes_before_hash.insert(0, 1);
-            let edge_s_key_int_bytes = digest(edge_s_key_int_bytes_before_hash).into_bytes();
-            let aux: [u8; 16] = edge_s_key_int_bytes.try_into().unwrap();
-            let edge_s_int_key = AES128::from(aux.clone());
+            let binding = digest(edge_s_key_int_bytes_before_hash);
+            let edge_s_key_int_hash = binding.as_bytes();
+            let edge_s_key_int_bytes: [u8; 16] = (&edge_s_key_int_hash[0..16]).try_into().unwrap();
+            let edge_s_int_key = AES128::from(edge_s_key_int_bytes);
+            println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
+
+            // Compute Edge Session Encryption Key
+            let mut edge_s_enc_key_bytes_before_hash = edge_s_key_bytes.clone();
+            edge_s_enc_key_bytes_before_hash.insert(0, 0);
+            let binding = digest(edge_s_enc_key_bytes_before_hash);
+            let edge_s_enc_key_hash = binding.as_bytes();
+            let edge_s_enc_key_bytes: [u8; 16] = (&edge_s_enc_key_hash[0..16]).try_into().unwrap();
+            let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes);
+            println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
 
             let mut dev_info_found = false;
             for dev_info in self.active_directory.iter_mut() {
@@ -145,10 +169,7 @@ pub(crate) mod e2l_crypto {
                     let frame_payload_result = decrypted_data_payload.frm_payload().unwrap();
                     match frame_payload_result {
                         lorawan_encoding::parser::FRMPayload::Data(frame_payload) => {
-                            if frame_payload.len() > 0 {
-                                let temperature: i8 = frame_payload[0].try_into().unwrap();
-                                info(format!("TEMPERATURE: {:?}", temperature));
-                            }
+                            println!("Edge Frame Payload: {:?}", frame_payload);
                         }
                         _ => println!("Failed to decrypt packet"),
                     };
