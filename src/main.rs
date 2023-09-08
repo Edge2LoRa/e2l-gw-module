@@ -431,16 +431,16 @@ async fn forward(
     let gw_rpc_endpoint_port = format!("50052");
     let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
 
+    // INIT RPC SERVER
+    let rpc_server = MyEdge2GatewayServer {};
+    // Compute private ECC key
+    let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
+
     // INIT RPC CLIENT
     let rpc_remote_host = "192.168.1.160";
     let rpc_remote_port = "50051";
     let mut rpc_client =
         init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
-
-    // INIT RPC SERVER
-    let rpc_server = MyEdge2GatewayServer {};
-    // Compute private ECC key
-    let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
     let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
         gw_ip_addr: gw_rpc_endpoint_address.clone(),

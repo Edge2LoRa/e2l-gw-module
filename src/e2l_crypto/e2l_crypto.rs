@@ -3,11 +3,18 @@ pub(crate) mod e2l_crypto {
     // Crypto
     extern crate p256;
 
+    use std::ops::Mul;
+
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
     use lorawan_encoding::parser::EncryptedDataPayload;
+    use p256::elliptic_curve::consts::P256;
     use p256::elliptic_curve::ecdh::SharedSecret as P256SharedSecret;
+    use p256::elliptic_curve::point::Double;
+    use p256::elliptic_curve::point::NonIdentity;
     use p256::elliptic_curve::rand_core::OsRng;
+    use p256::elliptic_curve::AffinePoint;
+    use p256::elliptic_curve::NonZeroScalar;
     use p256::elliptic_curve::PublicKey as P256PublicKey;
     use p256::elliptic_curve::SecretKey as P256SecretKey;
     use sha256::digest;
@@ -29,6 +36,18 @@ pub(crate) mod e2l_crypto {
     }
 
     impl E2LCrypto {
+        fn scalar_point_multiplication(
+            &self,
+            scalar: P256SecretKey<p256::NistP256>,
+            point: P256PublicKey<p256::NistP256>,
+        ) -> Result<p256::elliptic_curve::PublicKey<p256::NistP256>, p256::elliptic_curve::Error>
+        {
+            let non_zero_scalar: NonZeroScalar<p256::NistP256> = scalar.to_nonzero_scalar();
+            let non_identity_point: NonIdentity<AffinePoint<p256::NistP256>> =
+                point.to_nonidentity();
+            let result_projective_point = non_identity_point.mul(*non_zero_scalar);
+            return P256PublicKey::from_affine(result_projective_point.to_affine());
+        }
         /*
            @brief: This function computes the private/public ecc key pair of the GW
            @return: the compressed public key of the GW to be sent to the AS
@@ -38,6 +57,7 @@ pub(crate) mod e2l_crypto {
             self.public_key = Some(self.private_key.clone().unwrap().public_key());
             // Get sec1 bytes of Public Key (TO SEND TO AS)
             self.compressed_public_key = Some(self.public_key.clone().unwrap().to_sec1_bytes());
+
             return self.compressed_public_key.clone().unwrap();
         }
         /*
@@ -125,11 +145,14 @@ pub(crate) mod e2l_crypto {
                 self.active_directory.push(new_dev_info);
             }
 
-            let g_gw_ed: P256SharedSecret<p256::NistP256> = p256::ecdh::diffie_hellman(
-                self.private_key.clone().unwrap().to_nonzero_scalar(),
-                dev_public_key.as_affine(),
-            );
-            return g_gw_ed.raw_secret_bytes().to_vec();
+            let g_gw_ed = self
+                .scalar_point_multiplication(self.private_key.clone().unwrap(), dev_public_key)
+                .unwrap();
+            // let g_gw_ed: P256SharedSecret<p256::NistP256> = p256::ecdh::diffie_hellman(
+            //     self.private_key.clone().unwrap().to_nonzero_scalar(),
+            //     dev_public_key.as_affine(),
+            // );
+            return g_gw_ed.to_sec1_bytes().to_vec();
         }
 
         /*
