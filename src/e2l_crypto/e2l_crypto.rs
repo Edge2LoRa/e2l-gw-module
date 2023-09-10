@@ -8,9 +8,6 @@ pub(crate) mod e2l_crypto {
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
     use lorawan_encoding::parser::EncryptedDataPayload;
-    use p256::elliptic_curve::consts::P256;
-    use p256::elliptic_curve::ecdh::SharedSecret as P256SharedSecret;
-    use p256::elliptic_curve::point::Double;
     use p256::elliptic_curve::point::NonIdentity;
     use p256::elliptic_curve::rand_core::OsRng;
     use p256::elliptic_curve::AffinePoint;
@@ -36,6 +33,12 @@ pub(crate) mod e2l_crypto {
     }
 
     impl E2LCrypto {
+        /*
+           @brief: This function multiplies a scalar with a point on the curve
+           @param scalar: the scalar to multiply as private key
+           @param point: the point to multiply as public key
+           @return: the result of the scalar multiplication
+        */
         fn scalar_point_multiplication(
             &self,
             scalar: P256SecretKey<p256::NistP256>,
@@ -60,6 +63,7 @@ pub(crate) mod e2l_crypto {
 
             return self.compressed_public_key.clone().unwrap();
         }
+
         /*
            @brief: This function stores the public info of a dev and computes the g_gw_ed to send to the AS
            @param dev_eui: the dev_eui of the device
@@ -68,7 +72,6 @@ pub(crate) mod e2l_crypto {
            @param dev_public_key_compressed: the compressed public key of the device
            @return: the g_gw_ed to send to the AS
         */
-
         pub fn handle_ed_pub_info(
             &mut self,
             dev_eui: String,
@@ -77,10 +80,18 @@ pub(crate) mod e2l_crypto {
             dev_public_key_compressed: Vec<u8>,
         ) -> Vec<u8> {
             // GET g_as_ed
-            let aa: [u8; 32] = g_as_ed_compressed.try_into().unwrap();
-            let test_private: P256SecretKey<p256::NistP256> =
-                P256SecretKey::from_bytes(&aa.into()).unwrap();
-            let g_as_ed = test_private.public_key();
+            let g_as_ed_result: Result<P256PublicKey<p256::NistP256>, p256::elliptic_curve::Error> =
+                P256PublicKey::from_sec1_bytes(&g_as_ed_compressed);
+            let g_as_ed: P256PublicKey<p256::NistP256>;
+            match g_as_ed_result {
+                Ok(x) => {
+                    g_as_ed = x;
+                }
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                    return vec![];
+                }
+            };
 
             // Get Device public key
             let dev_public_key_result: Result<
@@ -99,12 +110,11 @@ pub(crate) mod e2l_crypto {
             };
 
             // Compute the Edge Session Key
-            let edge_s_key: P256SharedSecret<p256::NistP256> = p256::ecdh::diffie_hellman(
-                self.private_key.clone().unwrap().to_nonzero_scalar(),
-                g_as_ed.as_affine(),
-            );
-            println!("\nEdgeSKey: {:?}\n", edge_s_key.raw_secret_bytes());
-            let edge_s_key_bytes: Vec<u8> = edge_s_key.raw_secret_bytes().to_vec();
+            let edge_s_key: P256PublicKey<p256::NistP256> = self
+                .scalar_point_multiplication(self.private_key.clone().unwrap(), g_as_ed)
+                .unwrap();
+            println!("\nEdgeSKey: {:?}\n", edge_s_key.to_sec1_bytes());
+            let edge_s_key_bytes: Vec<u8> = edge_s_key.to_sec1_bytes().to_vec();
 
             // Compute Edge Session Integrity Key
             let mut edge_s_key_int_bytes_before_hash = edge_s_key_bytes.clone();
@@ -113,7 +123,7 @@ pub(crate) mod e2l_crypto {
             let edge_s_key_int_hash = binding.as_bytes();
             let edge_s_key_int_bytes: [u8; 16] = (&edge_s_key_int_hash[0..16]).try_into().unwrap();
             let edge_s_int_key = AES128::from(edge_s_key_int_bytes);
-            println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
+            // println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
 
             // Compute Edge Session Encryption Key
             let mut edge_s_enc_key_bytes_before_hash = edge_s_key_bytes.clone();
@@ -122,7 +132,7 @@ pub(crate) mod e2l_crypto {
             let edge_s_enc_key_hash = binding.as_bytes();
             let edge_s_enc_key_bytes: [u8; 16] = (&edge_s_enc_key_hash[0..16]).try_into().unwrap();
             let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes);
-            println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
+            // println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
 
             let mut dev_info_found = false;
             for dev_info in self.active_directory.iter_mut() {
@@ -148,10 +158,6 @@ pub(crate) mod e2l_crypto {
             let g_gw_ed = self
                 .scalar_point_multiplication(self.private_key.clone().unwrap(), dev_public_key)
                 .unwrap();
-            // let g_gw_ed: P256SharedSecret<p256::NistP256> = p256::ecdh::diffie_hellman(
-            //     self.private_key.clone().unwrap().to_nonzero_scalar(),
-            //     dev_public_key.as_affine(),
-            // );
             return g_gw_ed.to_sec1_bytes().to_vec();
         }
 
@@ -169,6 +175,13 @@ pub(crate) mod e2l_crypto {
             return false;
         }
 
+        /*
+           @brief: This function processes the frame
+           @param dev_addr: the dev_addr of the device
+           @param fcnt: the frame counter
+           @param phy: the encrypted data payload
+           @return: 0 if the frame was processed, -1 otherwise
+        */
         pub fn process_frame(
             &self,
             dev_addr: String,
