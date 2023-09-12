@@ -8,6 +8,7 @@ pub(crate) mod e2l_crypto {
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
     use lorawan_encoding::parser::EncryptedDataPayload;
+    use p256::elliptic_curve::point::AffineCoordinates;
     use p256::elliptic_curve::point::NonIdentity;
     use p256::elliptic_curve::rand_core::OsRng;
     use p256::elliptic_curve::AffinePoint;
@@ -110,11 +111,13 @@ pub(crate) mod e2l_crypto {
             };
 
             // Compute the Edge Session Key
-            let edge_s_key: P256PublicKey<p256::NistP256> = self
+            let edge_s_key_pub_key: P256PublicKey<p256::NistP256> = self
                 .scalar_point_multiplication(self.private_key.clone().unwrap(), g_as_ed)
                 .unwrap();
-            println!("\nEdgeSKey: {:?}\n", edge_s_key.to_sec1_bytes());
-            let edge_s_key_bytes: Vec<u8> = edge_s_key.to_sec1_bytes().to_vec();
+            let edge_s_key = edge_s_key_pub_key.as_affine().x();
+            println!("\nEdgeSKey: {:?}\n", edge_s_key);
+            let edge_s_key_bytes: Vec<u8> = edge_s_key.to_vec();
+            println!("\nEdgeSKeyBytes: {:?}\n", edge_s_key_bytes);
 
             // Compute Edge Session Integrity Key
             let mut edge_s_key_int_bytes_before_hash = edge_s_key_bytes.clone();
