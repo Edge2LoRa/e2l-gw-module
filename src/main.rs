@@ -1,4 +1,6 @@
 mod e2gw_rpc_client;
+mod e2gw_rpc_server;
+mod e2l_crypto;
 mod json_structs;
 mod lorawan_structs;
 mod mqtt_client;
@@ -23,15 +25,12 @@ extern crate p256;
 // E2L
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
-use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::NewDataRequest;
 
-// ECC
-use p256::elliptic_curve::rand_core::OsRng;
-use p256::elliptic_curve::PublicKey as P256PublicKey;
-use p256::elliptic_curve::SecretKey as P256SecretKey;
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
+use tonic::transport::Server;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
-use lorawan_encoding::keys::AES128;
 use lorawan_encoding::parser::{
     parse, AsPhyPayloadBytes, DataHeader, DataPayload, MHDRAble, MType, PhyPayload,
 };
@@ -53,24 +52,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
 
-// EDGE COUNTER
-static mut E2FRAME_DATA: Vec<i8> = vec![];
-const E2FRAME_DATA_MAX_SIZE: usize = 5;
-
-// #[derive(Debug, Serialize, Deserialize)]
-// enum Value {
-//     Null,
-//     Bool(bool),
-//     Number(Number),
-//     String(String),
-//     Array(Vec<Value>),
-//     HashSet(HashSet<String, Value>),
-// }
+// E2L modules
+use e2l_crypto::e2l_crypto::E2L_CRYPTO;
 
 lazy_static! {
     static ref PACKETNAMES: HashMap<u8, &'static str> = {
@@ -431,14 +417,6 @@ fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String) {
     });
 }
 
-fn process_temperature(temperature: i8) -> bool {
-    unsafe { E2FRAME_DATA.push(temperature) };
-    if unsafe { E2FRAME_DATA.len() } >= E2FRAME_DATA_MAX_SIZE {
-        return true;
-    }
-    return false;
-}
-
 async fn forward(
     bind_addr: &str,
     local_port: i32,
@@ -450,7 +428,13 @@ async fn forward(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GET IP ADDRESS
     let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
-    let gw_rpc_endpoint_port = format!("50051");
+    let gw_rpc_endpoint_port = format!("50052");
+    let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
+
+    // INIT RPC SERVER
+    let rpc_server = MyEdge2GatewayServer {};
+    // Compute private ECC key
+    let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
     // INIT RPC CLIENT
     let rpc_remote_host = "192.168.1.160";
@@ -458,34 +442,39 @@ async fn forward(
     let mut rpc_client =
         init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
 
-    // Compute private ECC key
-    let private_key: P256SecretKey<p256::NistP256> = P256SecretKey::random(&mut OsRng);
-    let public_key: P256PublicKey<p256::NistP256> = private_key.public_key();
-    // Get sec1 bytes of Public Key (TO SEND TO AS)
-    let public_key_sec1_bytes = public_key.to_sec1_bytes();
-
-    let request = tonic::Request::new(E2gwPubInfo {
-        gw_ip_addr: gw_rpc_endpoint_address,
-        gw_port: gw_rpc_endpoint_port,
-        e2gw_pub_key: public_key_sec1_bytes.into_vec(),
+    let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
+        gw_ip_addr: gw_rpc_endpoint_address.clone(),
+        gw_port: gw_rpc_endpoint_port.clone(),
+        e2gw_pub_key: compressed_public_key.into_vec(),
     });
     let response = rpc_client.store_e2gw_pub_info(request).await?;
-
     let status_code = response.get_ref().status_code;
     if status_code < 200 || status_code > 299 {
-        return Err("Unable to store public key".into());
+        return Err("Unable to send public key to the AS".into());
     }
-    let as_pub_key_sec1_bytes = response.get_ref().message.clone();
-    let as_pub_key: P256PublicKey<p256::NistP256> =
-        P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
 
-    let shared_secret =
-        p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
-    // Ok(rpc_client);
-    info(format!(
-        "Shared secret: {:?}",
-        shared_secret.raw_secret_bytes()
-    ));
+    // let rpc_server = rpc_server_ptr;
+    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
+    info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
+    let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
+
+    thread::spawn(move || {
+        let server_future = servicer.serve(rpc_endpoint.parse().unwrap());
+        rt.block_on(server_future)
+            .expect("RPC Server failed to start");
+    });
+
+    // let as_pub_key_sec1_bytes = response.get_ref().message.clone();
+    // let as_pub_key: P256PublicKey<p256::NistP256> =
+    //     P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
+
+    // let shared_secret =
+    //     p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
+    // // Ok(rpc_client);
+    // info(format!(
+    //     "Shared secret: {:?}",
+    //     shared_secret.raw_secret_bytes()
+    // ));
 
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
@@ -607,7 +596,6 @@ async fn forward(
             let to_send = buf[..num_bytes].to_vec();
 
             let mut will_send = true;
-            let mut edge_send = false;
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
                 0 => {
@@ -662,56 +650,40 @@ async fn forward(
                                         json_to_send,
                                     );
                                 };
-                                if check_range(
-                                    dev_addr,
-                                    fwinfo.start_addr.clone(),
-                                    fwinfo.end_addr.clone(),
-                                ) || fwinfo.dev_addrs.contains(&dev_addr)
+                                if true
+                                    || check_range(
+                                        dev_addr,
+                                        fwinfo.start_addr.clone(),
+                                        fwinfo.end_addr.clone(),
+                                    )
+                                    || fwinfo.dev_addrs.contains(&dev_addr)
                                 {
-                                    match dev_addr {
-                                        0x001AED84 => {
-                                            let app_s_key: AES128 = AES128::from([
-                                                0x03, 0x8A, 0xBE, 0xDC, 0x09, 0xB2, 0x68, 0xE8,
-                                                0xE9, 0xC3, 0x5B, 0xF1, 0x5F, 0xDE, 0x71, 0xE9,
-                                            ]);
-                                            let decrypted_data_payload = phy
-                                                .decrypt(
-                                                    Some(&app_s_key),
-                                                    Some(&app_s_key),
-                                                    fcnt.into(),
-                                                )
-                                                .unwrap();
-                                            debug(format!("Decrypted Packet"));
-                                            let frame_payload_result =
-                                                decrypted_data_payload.frm_payload().unwrap();
-                                            match frame_payload_result {
-                                                lorawan_encoding::parser::FRMPayload::Data(
-                                                    frame_payload,
-                                                ) => {
-                                                    if frame_payload.len() > 0 {
-                                                        let temperature: i8 =
-                                                            frame_payload[0].try_into().unwrap();
-                                                        info(format!(
-                                                            "TEMPERATURE: {:?}",
-                                                            temperature
-                                                        ));
-                                                        edge_send =
-                                                            process_temperature(temperature);
-                                                        will_send = false;
-                                                    }
-                                                }
-                                                _ => info(format!("NO BENE")),
-                                            };
-                                        }
-                                        _ => {
-                                            match fwinfo.forward_protocol {
-                                                ForwardProtocols::UDP => {
-                                                    debug(format!(
-                                                        "Forwarding to {:x?}",
-                                                        fwinfo.forward_host
-                                                    ));
-                                                } // _ => panic!("Forwarding protocol not implemented!"),
+                                    // Check if enabled E2ED
+                                    let e2ed_enabled: bool;
+                                    unsafe {
+                                        e2ed_enabled = E2L_CRYPTO
+                                            .check_e2ed_enabled(dev_addr.clone().to_string());
+                                    }
+                                    if e2ed_enabled {
+                                        unsafe {
+                                            let ret = E2L_CRYPTO.process_frame(
+                                                dev_addr.to_string(),
+                                                fcnt,
+                                                phy,
+                                            );
+                                            if ret < 0 {
+                                                info(format!("Failed to process payload for device {:x?} with error code {}", dev_addr, ret));
                                             }
+                                        };
+                                        will_send = false;
+                                    } else {
+                                        match fwinfo.forward_protocol {
+                                            ForwardProtocols::UDP => {
+                                                debug(format!(
+                                                    "Forwarding to {:x?}",
+                                                    fwinfo.forward_host
+                                                ));
+                                            } // _ => panic!("Forwarding protocol not implemented!"),
                                         }
                                     }
                                 } else {
@@ -746,11 +718,13 @@ async fn forward(
                                         json_to_send,
                                     );
                                 };
-                                if !check_range(
-                                    dev_eui,
-                                    fwinfo.start_filter_deveui.clone(),
-                                    fwinfo.end_filter_deveui.clone(),
-                                ) {
+                                if true
+                                    || !check_range(
+                                        dev_eui,
+                                        fwinfo.start_filter_deveui.clone(),
+                                        fwinfo.end_filter_deveui.clone(),
+                                    )
+                                {
                                     match fwinfo.forward_protocol {
                                         ForwardProtocols::UDP => {
                                             debug(format!(
@@ -783,38 +757,6 @@ async fn forward(
                     }
                 }
                 _ => (),
-            }
-
-            if edge_send {
-                let mut temp_sum: i32 = 0;
-                let mut array_str = format!("[");
-                for temp in unsafe { E2FRAME_DATA.iter() } {
-                    temp_sum += i32::from(*temp);
-                    array_str += &format!("{}, ", temp);
-                }
-                array_str += "]";
-                let temp_avg: i32 = temp_sum / unsafe { E2FRAME_DATA.len() } as i32;
-
-                info(format!(
-                    "Average Temp to Send: {}, from {}",
-                    temp_avg, array_str
-                ));
-                let start = SystemTime::now();
-                let since_the_epoch = start
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards");
-
-                let request = tonic::Request::new(NewDataRequest {
-                    name: "Hello, World!".into(),
-                    timetag: since_the_epoch.as_millis() as u64,
-                });
-                println!("Sending request: {:?}", request);
-                let response = rpc_client.new_data(request).await?;
-
-                println!("RESPONSE={:?}", response);
-
-                // Clean up E2DATA_FRAME
-                unsafe { E2FRAME_DATA = vec![] };
             }
             if will_send {
                 match sender.send(to_send.to_vec().clone()) {
