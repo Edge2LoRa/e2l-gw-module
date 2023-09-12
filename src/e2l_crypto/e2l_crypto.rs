@@ -15,7 +15,8 @@ pub(crate) mod e2l_crypto {
     use p256::elliptic_curve::NonZeroScalar;
     use p256::elliptic_curve::PublicKey as P256PublicKey;
     use p256::elliptic_curve::SecretKey as P256SecretKey;
-    use sha256::digest;
+    use sha2::Digest;
+    use sha2::Sha256;
 
     pub struct DevInfo {
         dev_eui: String,
@@ -115,28 +116,27 @@ pub(crate) mod e2l_crypto {
                 .scalar_point_multiplication(self.private_key.clone().unwrap(), g_as_ed)
                 .unwrap();
             let edge_s_key = edge_s_key_pub_key.as_affine().x();
-            println!("\nEdgeSKey: {:?}\n", edge_s_key);
             let edge_s_key_bytes: Vec<u8> = edge_s_key.to_vec();
-            println!("\nEdgeSKeyBytes: {:?}\n", edge_s_key_bytes);
 
             // Compute Edge Session Integrity Key
             let mut edge_s_key_int_bytes_before_hash = edge_s_key_bytes.clone();
-            edge_s_key_int_bytes_before_hash.insert(0, 1);
-            let binding = digest(edge_s_key_int_bytes_before_hash);
-            let edge_s_key_int_hash = binding.as_bytes();
-            let edge_s_key_int_bytes: [u8; 16] = (&edge_s_key_int_hash[0..16]).try_into().unwrap();
-            let edge_s_int_key = AES128::from(edge_s_key_int_bytes);
-            // println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
+            edge_s_key_int_bytes_before_hash.insert(0, 0);
+            let edge_s_int_key_hash_result = Sha256::digest(edge_s_key_int_bytes_before_hash);
+            let edge_s_int_key_bytes: [u8; 16] =
+                edge_s_int_key_hash_result[0..16].try_into().unwrap();
+            let edge_s_int_key = AES128::from(edge_s_int_key_bytes);
+            println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
 
             // Compute Edge Session Encryption Key
-            let mut edge_s_enc_key_bytes_before_hash = edge_s_key_bytes.clone();
-            edge_s_enc_key_bytes_before_hash.insert(0, 0);
-            let binding = digest(edge_s_enc_key_bytes_before_hash);
-            let edge_s_enc_key_hash = binding.as_bytes();
-            let edge_s_enc_key_bytes: [u8; 16] = (&edge_s_enc_key_hash[0..16]).try_into().unwrap();
+            let mut edge_s_key_enc_bytes_before_hash = edge_s_key_bytes.clone();
+            edge_s_key_enc_bytes_before_hash.insert(0, 1);
+            let edge_s_enc_key_hash_result = Sha256::digest(edge_s_key_enc_bytes_before_hash);
+            let edge_s_enc_key_bytes: [u8; 16] =
+                edge_s_enc_key_hash_result[0..16].try_into().unwrap();
             let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes);
-            // println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
+            println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
 
+            // Add Info to dev info struct
             let mut dev_info_found = false;
             for dev_info in self.active_directory.iter_mut() {
                 if dev_info.dev_addr == dev_addr {
