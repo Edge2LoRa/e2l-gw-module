@@ -440,10 +440,11 @@ async fn forward(
     let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
     // INIT RPC CLIENT
-    let rpc_remote_host = "192.168.1.160";
-    let rpc_remote_port = "50051";
-    let mut rpc_client =
-        init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
+    let rpc_remote_host = dotenv::var("RPC_DM_REMOTE_HOST").unwrap();
+    let rpc_remote_port = dotenv::var("RPC_DM_REMOTE_PORT").unwrap();
+    // let rpc_remote_host = "192.168.1.160";
+    // let rpc_remote_port = "50051";
+    let mut rpc_client = init_rpc_client(rpc_remote_host.clone(), rpc_remote_port.clone()).await?;
 
     let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
         gw_ip_addr: gw_rpc_endpoint_address.clone(),
