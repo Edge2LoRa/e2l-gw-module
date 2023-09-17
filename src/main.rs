@@ -22,12 +22,14 @@ extern crate local_ip_address;
 // extern crate elliptic_curve;
 extern crate p256;
 
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
 // E2L
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
 
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
+use e2l_crypto::e2l_crypto::e2l_crypto::AggregationResult;
 use tonic::transport::Server;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
@@ -51,6 +53,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
@@ -437,10 +440,11 @@ async fn forward(
     let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
     // INIT RPC CLIENT
-    let rpc_remote_host = "192.168.1.160";
-    let rpc_remote_port = "50051";
-    let mut rpc_client =
-        init_rpc_client(rpc_remote_host.to_owned(), rpc_remote_port.to_owned()).await?;
+    let rpc_remote_host = dotenv::var("RPC_DM_REMOTE_HOST").unwrap();
+    let rpc_remote_port = dotenv::var("RPC_DM_REMOTE_PORT").unwrap();
+    // let rpc_remote_host = "192.168.1.160";
+    // let rpc_remote_port = "50051";
+    let mut rpc_client = init_rpc_client(rpc_remote_host.clone(), rpc_remote_port.clone()).await?;
 
     let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
         gw_ip_addr: gw_rpc_endpoint_address.clone(),
@@ -463,18 +467,6 @@ async fn forward(
         rt.block_on(server_future)
             .expect("RPC Server failed to start");
     });
-
-    // let as_pub_key_sec1_bytes = response.get_ref().message.clone();
-    // let as_pub_key: P256PublicKey<p256::NistP256> =
-    //     P256PublicKey::from_sec1_bytes(&as_pub_key_sec1_bytes).unwrap();
-
-    // let shared_secret =
-    //     p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), as_pub_key.as_affine());
-    // // Ok(rpc_client);
-    // info(format!(
-    //     "Shared secret: {:?}",
-    //     shared_secret.raw_secret_bytes()
-    // ));
 
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
@@ -627,11 +619,15 @@ async fn forward(
                                 let fhdr = phy.fhdr();
                                 let fcnt = fhdr.fcnt();
                                 let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
+                                let aux: Vec<u8> = dev_addr_vec.clone().into_iter().rev().collect();
+                                let strs: Vec<String> =
+                                    aux.iter().map(|b| format!("{:02X}", b)).collect();
+                                let dev_addr_string = strs.join("");
 
+                                // let dev_addr_string = format!("{:x}", dev_addr_vec.clone());
                                 let dev_addr = u32::from_be_bytes(extract_dev_addr_array(
                                     dev_addr_vec.into_iter().rev().collect(),
                                 ));
-                                debug(format!("Extracted DevAddr {:x?}", dev_addr));
                                 if mqtt_client.clone().is_some() {
                                     let json_to_send = build_json_for_broker(
                                         idx,
@@ -661,20 +657,38 @@ async fn forward(
                                     // Check if enabled E2ED
                                     let e2ed_enabled: bool;
                                     unsafe {
-                                        e2ed_enabled = E2L_CRYPTO
-                                            .check_e2ed_enabled(dev_addr.clone().to_string());
+                                        e2ed_enabled =
+                                            E2L_CRYPTO.check_e2ed_enabled(dev_addr_string.clone());
                                     }
                                     if e2ed_enabled {
                                         unsafe {
-                                            let ret = E2L_CRYPTO.process_frame(
-                                                dev_addr.to_string(),
-                                                fcnt,
-                                                phy,
-                                            );
-                                            if ret < 0 {
-                                                info(format!("Failed to process payload for device {:x?} with error code {}", dev_addr, ret));
+                                            let ret: Option<AggregationResult> = E2L_CRYPTO
+                                                .process_frame(dev_addr_string.clone(), fcnt, phy);
+                                            if ret.is_some() {
+                                                let ret = ret.unwrap();
+                                                if ret.status_code == 0 {
+                                                    // get epoch time
+                                                    let start = SystemTime::now();
+                                                    let since_the_epoch = start
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .expect("Time went backwards");
+                                                    let edge_data_request: tonic::Request<
+                                                        EdgeData,
+                                                    > = tonic::Request::new(EdgeData {
+                                                        gw_id: gw_rpc_endpoint_address.clone(),
+                                                        dev_eui: ret.dev_eui,
+                                                        dev_addr: ret.dev_addr,
+                                                        aggregated_data: ret.aggregated_data,
+                                                        timetag: since_the_epoch.as_millis() as u64,
+                                                    });
+                                                    let _response = rpc_client
+                                                        .new_data(edge_data_request)
+                                                        .await?;
+                                                }
+                                            } else {
+                                                // info(format!("Device not found or aggregation function not defined!"))
                                             }
-                                        };
+                                        }
                                         will_send = false;
                                     } else {
                                         match fwinfo.forward_protocol {
