@@ -1,5 +1,5 @@
 pub(crate) mod e2gw_rpc_server {
-    use crate::e2l_crypto::e2l_crypto::E2L_CRYPTO;
+    use crate::e2l_crypto::e2l_crypto::{e2l_crypto::E2LCrypto, E2L_CRYPTO};
 
     // RPC
     use self::edge2_gateway_server::Edge2Gateway;
@@ -42,6 +42,37 @@ pub(crate) mod e2gw_rpc_server {
                     };
                 }
                 Ok(Response::new(reply))
+            }
+        }
+
+        async fn update_aggregation_params(
+            &self,
+            request: Request<AggregationParams>,
+        ) -> Result<Response<GwResponse>, Status> {
+            let inner_request = request.into_inner();
+            let aggregation_function: u32 = inner_request.aggregation_function;
+            let window_size: u32 = inner_request.window_size;
+            unsafe {
+                let ret = E2L_CRYPTO
+                    .update_aggregation_params(aggregation_function as u8, window_size as usize);
+            }
+            let response = GwResponse {
+                status_code: 0,
+                message: "Parameters Updated!".to_string(),
+            };
+            Ok(Response::new(response))
+        }
+
+        async fn remove_e2device(
+            &self,
+            request: Request<E2lDeviceInfo>,
+        ) -> Result<Response<E2lData>, Status> {
+            let inner_request = request.into_inner();
+            let dev_eui = inner_request.dev_eui;
+            let _dev_addr = inner_request.dev_addr;
+            unsafe {
+                let response: E2lData = E2L_CRYPTO.remove_e2device(dev_eui);
+                Ok(Response::new(response))
             }
         }
     }

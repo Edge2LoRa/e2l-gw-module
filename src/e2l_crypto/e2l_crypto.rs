@@ -8,6 +8,7 @@ pub(crate) mod e2l_crypto {
     extern crate p256;
 
     use std::ops::Mul;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
@@ -283,6 +284,93 @@ pub(crate) mod e2l_crypto {
             }
 
             return None;
+        }
+
+        pub fn update_aggregation_params(
+            &mut self,
+            aggregation_function: u8,
+            window_size: usize,
+        ) -> i32 {
+            self.aggregation_function = aggregation_function;
+            self.window_size = window_size;
+            println!(
+                "Aggregation function updated to: {:?}",
+                aggregation_function
+            );
+            println!("Window size updated to: {:?}", window_size);
+            return 0;
+        }
+
+        pub fn remove_e2device(
+            &mut self,
+            dev_eui: String,
+        ) -> crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
+            let dev_info: &mut DevInfo;
+            for dev_info_iter in self.active_directory.iter_mut() {
+                if dev_info_iter.dev_eui == dev_eui {
+                    dev_info = dev_info_iter;
+                    let aggregation_result: i64;
+                    match self.aggregation_function {
+                        i if i == AVG_ID => {
+                            let sum: i64 = dev_info.values.iter().sum();
+                            aggregation_result = sum / (dev_info.values.len() as i64);
+                        }
+                        i if i == SUM_ID => {
+                            aggregation_result = dev_info.values.iter().sum();
+                        }
+                        i if i == MIN_ID => {
+                            aggregation_result = *dev_info.values.iter().min().unwrap();
+                        }
+                        i if i == MAX_ID => {
+                            aggregation_result = *dev_info.values.iter().max().unwrap();
+                        }
+                        _ => {
+                            println!("Aggregation function not supported!");
+                            let response =
+                                crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
+                                    status_code: -2,
+                                    dev_eui: "".to_string(),
+                                    dev_addr: "".to_string(),
+                                    aggregated_data: 0,
+                                    aggregated_data_num: 0,
+                                    timetag: 0,
+                                };
+                            return response;
+                        }
+                    }
+
+                    // get epoch time
+                    let start = SystemTime::now();
+                    let since_the_epoch = start
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time went backwards");
+                    let response =
+                        crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
+                            status_code: -1,
+                            dev_eui: dev_info.dev_eui.clone(),
+                            dev_addr: dev_info.dev_addr.clone(),
+                            aggregated_data: aggregation_result,
+                            aggregated_data_num: dev_info.values.len() as u64,
+                            timetag: since_the_epoch.as_millis() as u64,
+                        };
+                    let index = self
+                        .active_directory
+                        .iter()
+                        .position(|x| *x.dev_eui == dev_eui)
+                        .unwrap();
+                    self.active_directory.remove(index);
+                    return response;
+                }
+            }
+            let response = crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
+                status_code: -1,
+                dev_eui: "".to_string(),
+                dev_addr: "".to_string(),
+                aggregated_data: 0,
+                aggregated_data_num: 0,
+                timetag: 0,
+            };
+            return response;
         }
     }
 }
