@@ -436,6 +436,16 @@ async fn forward(
 
     // INIT RPC SERVER
     let rpc_server = MyEdge2GatewayServer {};
+    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
+    info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
+    let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
+
+    thread::spawn(move || {
+        let server_future = servicer.serve(rpc_endpoint.parse().unwrap());
+        rt.block_on(server_future)
+            .expect("RPC Server failed to start");
+    });
+
     // Compute private ECC key
     let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
@@ -456,17 +466,6 @@ async fn forward(
     if status_code < 200 || status_code > 299 {
         return Err("Unable to send public key to the AS".into());
     }
-
-    // let rpc_server = rpc_server_ptr;
-    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
-    info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
-    let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
-
-    thread::spawn(move || {
-        let server_future = servicer.serve(rpc_endpoint.parse().unwrap());
-        rt.block_on(server_future)
-            .expect("RPC Server failed to start");
-    });
 
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
