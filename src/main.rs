@@ -23,6 +23,7 @@ extern crate local_ip_address;
 extern crate p256;
 
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::GwLog;
 // E2L
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
@@ -43,6 +44,7 @@ use rand::Rng;
 use rumqttc::{Client, MqttOptions, QoS};
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::fmt::format;
 use std::fmt::Display;
 use std::fmt::{self};
 // use std::io::Read;
@@ -60,6 +62,13 @@ static mut DEBUG: bool = false;
 
 // E2L modules
 use e2l_crypto::e2l_crypto::E2L_CRYPTO;
+static EDGE_FRAME_ID: u64 = 1;
+static LEGACY_FRAME_ID: u64 = 2;
+
+static DEFAULT_APP_PORT: u8 = 2;
+static _DEFAULT_E2L_JOIN_PORT: u8 = 3;
+static DEFAULT_E2L_APP_PORT: u8 = 4;
+static _DEFAULT_E2L_COMMAND_PORT: u8 = 5;
 
 lazy_static! {
     static ref PACKETNAMES: HashMap<u8, &'static str> = {
@@ -619,6 +628,7 @@ async fn forward(
                                 let fcnt = fhdr.fcnt();
                                 let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
                                 let aux: Vec<u8> = dev_addr_vec.clone().into_iter().rev().collect();
+                                let f_port = phy.f_port().unwrap();
                                 let strs: Vec<String> =
                                     aux.iter().map(|b| format!("{:02X}", b)).collect();
                                 let dev_addr_string = strs.join("");
@@ -656,13 +666,25 @@ async fn forward(
                                     // Check if enabled E2ED
                                     let e2ed_enabled: bool;
                                     unsafe {
-                                        e2ed_enabled =
-                                            E2L_CRYPTO.check_e2ed_enabled(dev_addr_string.clone());
+                                        e2ed_enabled = (f_port == DEFAULT_E2L_APP_PORT)
+                                            && E2L_CRYPTO
+                                                .check_e2ed_enabled(dev_addr_string.clone());
                                     }
                                     if e2ed_enabled {
                                         unsafe {
                                             let ret: Option<AggregationResult> = E2L_CRYPTO
                                                 .process_frame(dev_addr_string.clone(), fcnt, phy);
+                                            let log_request: tonic::Request<GwLog> =
+                                                tonic::Request::new(GwLog {
+                                                    gw_id: gw_rpc_endpoint_address.clone(),
+                                                    dev_addr: dev_addr_string.clone(),
+                                                    log: format!(
+                                                        "Processed Edge Frame from {}",
+                                                        dev_addr.clone()
+                                                    ),
+                                                    frame_type: EDGE_FRAME_ID,
+                                                });
+                                            rpc_client.gw_log(log_request).await?;
                                             if ret.is_some() {
                                                 let ret = ret.unwrap();
                                                 if ret.status_code == 0 {
@@ -685,6 +707,7 @@ async fn forward(
                                                         .await?;
                                                 }
                                             } else {
+                                                info(format!("Device not found or aggregation function not defined!"));
                                                 // info(format!("Device not found or aggregation function not defined!"))
                                             }
                                         }
@@ -696,6 +719,23 @@ async fn forward(
                                                     "Forwarding to {:x?}",
                                                     fwinfo.forward_host
                                                 ));
+                                                if f_port == DEFAULT_APP_PORT {
+                                                    info(format!(
+                                                        "Forwarding Legacy Frame to {}",
+                                                        dev_addr.clone()
+                                                    ));
+                                                    let log_request: tonic::Request<GwLog> =
+                                                        tonic::Request::new(GwLog {
+                                                            gw_id: gw_rpc_endpoint_address.clone(),
+                                                            dev_addr: dev_addr_string.clone(),
+                                                            log: format!(
+                                                                "Received Legacy Frame from {}",
+                                                                dev_addr.clone()
+                                                            ),
+                                                            frame_type: LEGACY_FRAME_ID,
+                                                        });
+                                                    rpc_client.gw_log(log_request).await?;
+                                                }
                                             } // _ => panic!("Forwarding protocol not implemented!"),
                                         }
                                     }

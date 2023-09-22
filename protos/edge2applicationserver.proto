@@ -6,7 +6,10 @@ service Edge2ApplicationServer {
   rpc new_data (EdgeData) returns (ResponseMessage);
 
   rpc store_e2gw_pub_info (E2GWPubInfo) returns (ResponseMessage);
-}
+  
+  rpc gw_log (GWLog) returns (ResponseMessage);
+
+} 
 
 message ResponseMessage {
   sint32 status_code = 1;
@@ -25,4 +28,11 @@ message EdgeData {
   string dev_addr = 3;
   sint64 aggregated_data = 4;
   uint64 timetag = 5;
+}
+
+message GWLog {
+  string gw_id = 1;
+  string dev_addr = 2;
+  string log = 3;
+  uint64 frame_type = 4;  
 }
