@@ -738,17 +738,19 @@ async fn forward(
                                                         });
                                                     rpc_client.gw_log(log_request).await?;
                                                 } else {
-                                                    // SEND LOG
-                                                    let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
-                                                    gw_id: gw_rpc_endpoint_address.clone(),
-                                                    dev_addr: dev_addr_string.clone(),
-                                                    log: format!(
-                                                        "Received Edge Frame from {} (NOT PROCESSING)",
-                                                        dev_addr.clone()
-                                                    ),
-                                                    frame_type: EDGE_FRAME_ID,
-                                                });
-                                                    rpc_client.gw_log(log_request).await?;
+                                                    if f_port == DEFAULT_E2L_APP_PORT {
+                                                        // SEND LOG
+                                                        let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
+                                                            gw_id: gw_rpc_endpoint_address.clone(),
+                                                            dev_addr: dev_addr_string.clone(),
+                                                            log: format!(
+                                                                "Received Edge Frame from {} (NOT PROCESSING)",
+                                                                dev_addr.clone()
+                                                            ),
+                                                            frame_type: EDGE_FRAME_ID,
+                                                        });
+                                                        rpc_client.gw_log(log_request).await?;
+                                                    }
                                                 }
                                             } // _ => panic!("Forwarding protocol not implemented!"),
                                         }

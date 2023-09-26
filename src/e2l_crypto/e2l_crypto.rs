@@ -240,19 +240,43 @@ pub(crate) mod e2l_crypto {
                             dev_info.values.push(sensor_value);
                             if dev_info.values.len() >= self.window_size {
                                 let aggregation_result: i64;
+                                let mut status_code: i64 = 0;
                                 match self.aggregation_function {
                                     i if i == AVG_ID => {
-                                        let sum: i64 = dev_info.values.iter().sum();
-                                        aggregation_result = sum / (dev_info.values.len() as i64);
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            let sum: i64 = dev_info.values.iter().sum();
+                                            aggregation_result =
+                                                sum / (dev_info.values.len() as i64);
+                                        }
                                     }
                                     i if i == SUM_ID => {
-                                        aggregation_result = dev_info.values.iter().sum();
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            aggregation_result = dev_info.values.iter().sum();
+                                        }
                                     }
                                     i if i == MIN_ID => {
-                                        aggregation_result = *dev_info.values.iter().min().unwrap();
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            aggregation_result =
+                                                *dev_info.values.iter().min().unwrap();
+                                        }
                                     }
                                     i if i == MAX_ID => {
-                                        aggregation_result = *dev_info.values.iter().max().unwrap();
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            aggregation_result =
+                                                *dev_info.values.iter().max().unwrap();
+                                        }
                                     }
                                     _ => {
                                         println!("Aggregation function not supported!");
@@ -264,7 +288,7 @@ pub(crate) mod e2l_crypto {
                                 dev_info.values = Vec::new();
 
                                 return Some(AggregationResult {
-                                    status_code: 0,
+                                    status_code: status_code,
                                     dev_eui: dev_info.dev_eui.clone(),
                                     dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: aggregation_result,
