@@ -674,6 +674,7 @@ async fn forward(
                                         unsafe {
                                             let ret: Option<AggregationResult> = E2L_CRYPTO
                                                 .process_frame(dev_addr_string.clone(), fcnt, phy);
+                                            // SEND LOG
                                             let log_request: tonic::Request<GwLog> =
                                                 tonic::Request::new(GwLog {
                                                     gw_id: gw_rpc_endpoint_address.clone(),
@@ -686,6 +687,7 @@ async fn forward(
                                                 });
                                             rpc_client.gw_log(log_request).await?;
                                             if ret.is_some() {
+                                                // AGGREGATION RESULT
                                                 let ret = ret.unwrap();
                                                 if ret.status_code == 0 {
                                                     // get epoch time
@@ -707,7 +709,7 @@ async fn forward(
                                                         .await?;
                                                 }
                                             } else {
-                                                info(format!("Device not found or aggregation function not defined!"));
+                                                // info(format!("Device not found or aggregation function not defined!"));
                                                 // info(format!("Device not found or aggregation function not defined!"))
                                             }
                                         }
@@ -734,6 +736,18 @@ async fn forward(
                                                             ),
                                                             frame_type: LEGACY_FRAME_ID,
                                                         });
+                                                    rpc_client.gw_log(log_request).await?;
+                                                } else {
+                                                    // SEND LOG
+                                                    let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
+                                                    gw_id: gw_rpc_endpoint_address.clone(),
+                                                    dev_addr: dev_addr_string.clone(),
+                                                    log: format!(
+                                                        "Received Edge Frame from {} (NOT PROCESSING)",
+                                                        dev_addr.clone()
+                                                    ),
+                                                    frame_type: EDGE_FRAME_ID,
+                                                });
                                                     rpc_client.gw_log(log_request).await?;
                                                 }
                                             } // _ => panic!("Forwarding protocol not implemented!"),

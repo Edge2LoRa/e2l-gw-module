@@ -306,6 +306,7 @@ pub(crate) mod e2l_crypto {
             dev_eui: String,
         ) -> crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
             let dev_info: &mut DevInfo;
+            println!("\nRemoving device: {:?}", dev_eui);
             for dev_info_iter in self.active_directory.iter_mut() {
                 if dev_info_iter.dev_eui == dev_eui {
                     dev_info = dev_info_iter;
@@ -319,22 +320,43 @@ pub(crate) mod e2l_crypto {
                             aggregation_result = dev_info.values.iter().sum();
                         }
                         i if i == MIN_ID => {
-                            aggregation_result = *dev_info.values.iter().min().unwrap();
+                            let min_result = dev_info.values.iter().min();
+                            if min_result.is_none() {
+                                aggregation_result = 0;
+                            } else {
+                                aggregation_result = *min_result.unwrap();
+                            }
                         }
                         i if i == MAX_ID => {
-                            aggregation_result = *dev_info.values.iter().max().unwrap();
+                            let max_result = dev_info.values.iter().max();
+                            if max_result.is_none() {
+                                aggregation_result = 0;
+                            } else {
+                                aggregation_result = *max_result.unwrap();
+                            }
                         }
                         _ => {
                             println!("Aggregation function not supported!");
+                            // get epoch time
+                            let start = SystemTime::now();
+                            let since_the_epoch = start
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time went backwards");
                             let response =
                                 crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
-                                    status_code: -2,
-                                    dev_eui: "".to_string(),
-                                    dev_addr: "".to_string(),
+                                    status_code: 0,
+                                    dev_eui: dev_info.dev_eui.clone(),
+                                    dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: 0,
                                     aggregated_data_num: 0,
-                                    timetag: 0,
+                                    timetag: since_the_epoch.as_millis() as u64,
                                 };
+                            let index = self
+                                .active_directory
+                                .iter()
+                                .position(|x| *x.dev_eui == dev_eui)
+                                .unwrap();
+                            self.active_directory.remove(index);
                             return response;
                         }
                     }
@@ -346,7 +368,7 @@ pub(crate) mod e2l_crypto {
                         .expect("Time went backwards");
                     let response =
                         crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
-                            status_code: -1,
+                            status_code: 0,
                             dev_eui: dev_info.dev_eui.clone(),
                             dev_addr: dev_info.dev_addr.clone(),
                             aggregated_data: aggregation_result,
