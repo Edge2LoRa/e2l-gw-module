@@ -335,28 +335,39 @@ pub(crate) mod e2l_crypto {
                 if dev_info_iter.dev_eui == dev_eui {
                     dev_info = dev_info_iter;
                     let aggregation_result: i64;
+                    let mut status_code: i64 = 0;
                     match self.aggregation_function {
                         i if i == AVG_ID => {
-                            let sum: i64 = dev_info.values.iter().sum();
-                            aggregation_result = sum / (dev_info.values.len() as i64);
+                            if dev_info.values.len() == 0 {
+                                aggregation_result = 0;
+                                status_code = -1;
+                            } else {
+                                let sum: i64 = dev_info.values.iter().sum();
+                                aggregation_result = sum / (dev_info.values.len() as i64);
+                            }
                         }
                         i if i == SUM_ID => {
-                            aggregation_result = dev_info.values.iter().sum();
+                            if dev_info.values.len() == 0 {
+                                aggregation_result = 0;
+                                status_code = -1;
+                            } else {
+                                aggregation_result = dev_info.values.iter().sum();
+                            }
                         }
                         i if i == MIN_ID => {
-                            let min_result = dev_info.values.iter().min();
-                            if min_result.is_none() {
+                            if dev_info.values.len() == 0 {
                                 aggregation_result = 0;
+                                status_code = -1;
                             } else {
-                                aggregation_result = *min_result.unwrap();
+                                aggregation_result = *dev_info.values.iter().min().unwrap();
                             }
                         }
                         i if i == MAX_ID => {
-                            let max_result = dev_info.values.iter().max();
-                            if max_result.is_none() {
+                            if dev_info.values.len() == 0 {
                                 aggregation_result = 0;
+                                status_code = -1;
                             } else {
-                                aggregation_result = *max_result.unwrap();
+                                aggregation_result = *dev_info.values.iter().max().unwrap();
                             }
                         }
                         _ => {
@@ -392,7 +403,7 @@ pub(crate) mod e2l_crypto {
                         .expect("Time went backwards");
                     let response =
                         crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
-                            status_code: 0,
+                            status_code: status_code,
                             dev_eui: dev_info.dev_eui.clone(),
                             dev_addr: dev_info.dev_addr.clone(),
                             aggregated_data: aggregation_result,
