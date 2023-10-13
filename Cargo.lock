@@ -330,6 +330,30 @@ version = "0.15.0"
 source = "git+https://github.com/dotenv-rs/dotenv#3c1a77bc95821777e5ceb996c5e0b082f2a3ea38"
 
 [[package]]
+name = "e2l-gw-edge-module"
+version = "1.0.0"
+dependencies = [
+ "base64 0.13.0",
+ "dotenv",
+ "getopts",
+ "hex",
+ "lazy_static",
+ "local-ip-address",
+ "lorawan-encoding",
+ "p256",
+ "prost",
+ "rand 0.3.23",
+ "rumqttc",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -812,30 +836,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "lora-proxy"
-version = "0.1.0"
-dependencies = [
- "base64 0.13.0",
- "dotenv",
- "getopts",
- "hex",
- "lazy_static",
- "local-ip-address",
- "lorawan-encoding",
- "p256",
- "prost",
- "rand 0.3.23",
- "rumqttc",
- "serde",
- "serde_derive",
- "serde_json",
- "sha2",
- "tokio",
- "tonic",
- "tonic-build",
 ]
 
 [[package]]

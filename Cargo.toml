@@ -1,14 +1,14 @@
 [package]
-name = "lora-proxy"
-version = "0.1.0"
+name = "e2l-gw-edge-module"
+version = "1.0.0"
 edition = "2021"
-authors = ["g.pillon"]
+authors = ["s.milani", "d.garlisi"]
 description = "Cross-platform multi-client UDP proxy"
-homepage = "https://github.com/neosmart/udpproxy"
-repository = "https://github.com/neosmart/udpproxy"
+homepage = "https://github.com/Edge2LoRa/e2l-gw-module"
+repository = "https://github.com/Edge2LoRa/e2l-gw-module"
 readme = "README.md"
-keywords = ["proxy", "udp", "networking"]
-categories = ["command-line-utilities", "network-programming"]
+keywords = ["LoRaWAN", "LoRa", "Edge2LoRa", "Edge Computing"]
+categories = ["network-programming", "edge-computing", "lorawan", "edge2lora"]
 license = "MIT"
 
 [dependencies]
