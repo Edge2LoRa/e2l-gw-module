@@ -240,19 +240,43 @@ pub(crate) mod e2l_crypto {
                             dev_info.values.push(sensor_value);
                             if dev_info.values.len() >= self.window_size {
                                 let aggregation_result: i64;
+                                let mut status_code: i64 = 0;
                                 match self.aggregation_function {
                                     i if i == AVG_ID => {
-                                        let sum: i64 = dev_info.values.iter().sum();
-                                        aggregation_result = sum / (dev_info.values.len() as i64);
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            let sum: i64 = dev_info.values.iter().sum();
+                                            aggregation_result =
+                                                sum / (dev_info.values.len() as i64);
+                                        }
                                     }
                                     i if i == SUM_ID => {
-                                        aggregation_result = dev_info.values.iter().sum();
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            aggregation_result = dev_info.values.iter().sum();
+                                        }
                                     }
                                     i if i == MIN_ID => {
-                                        aggregation_result = *dev_info.values.iter().min().unwrap();
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            aggregation_result =
+                                                *dev_info.values.iter().min().unwrap();
+                                        }
                                     }
                                     i if i == MAX_ID => {
-                                        aggregation_result = *dev_info.values.iter().max().unwrap();
+                                        if dev_info.values.len() == 0 {
+                                            aggregation_result = 0;
+                                            status_code = -1;
+                                        } else {
+                                            aggregation_result =
+                                                *dev_info.values.iter().max().unwrap();
+                                        }
                                     }
                                     _ => {
                                         println!("Aggregation function not supported!");
@@ -264,7 +288,7 @@ pub(crate) mod e2l_crypto {
                                 dev_info.values = Vec::new();
 
                                 return Some(AggregationResult {
-                                    status_code: 0,
+                                    status_code: status_code,
                                     dev_eui: dev_info.dev_eui.clone(),
                                     dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: aggregation_result,
@@ -306,35 +330,68 @@ pub(crate) mod e2l_crypto {
             dev_eui: String,
         ) -> crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
             let dev_info: &mut DevInfo;
+            println!("\nRemoving device: {:?}", dev_eui);
             for dev_info_iter in self.active_directory.iter_mut() {
                 if dev_info_iter.dev_eui == dev_eui {
                     dev_info = dev_info_iter;
                     let aggregation_result: i64;
+                    let mut status_code: i64 = 0;
                     match self.aggregation_function {
                         i if i == AVG_ID => {
-                            let sum: i64 = dev_info.values.iter().sum();
-                            aggregation_result = sum / (dev_info.values.len() as i64);
+                            if dev_info.values.len() == 0 {
+                                aggregation_result = 0;
+                                status_code = -1;
+                            } else {
+                                let sum: i64 = dev_info.values.iter().sum();
+                                aggregation_result = sum / (dev_info.values.len() as i64);
+                            }
                         }
                         i if i == SUM_ID => {
-                            aggregation_result = dev_info.values.iter().sum();
+                            if dev_info.values.len() == 0 {
+                                aggregation_result = 0;
+                                status_code = -1;
+                            } else {
+                                aggregation_result = dev_info.values.iter().sum();
+                            }
                         }
                         i if i == MIN_ID => {
-                            aggregation_result = *dev_info.values.iter().min().unwrap();
+                            if dev_info.values.len() == 0 {
+                                aggregation_result = 0;
+                                status_code = -1;
+                            } else {
+                                aggregation_result = *dev_info.values.iter().min().unwrap();
+                            }
                         }
                         i if i == MAX_ID => {
-                            aggregation_result = *dev_info.values.iter().max().unwrap();
+                            if dev_info.values.len() == 0 {
+                                aggregation_result = 0;
+                                status_code = -1;
+                            } else {
+                                aggregation_result = *dev_info.values.iter().max().unwrap();
+                            }
                         }
                         _ => {
                             println!("Aggregation function not supported!");
+                            // get epoch time
+                            let start = SystemTime::now();
+                            let since_the_epoch = start
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time went backwards");
                             let response =
                                 crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
-                                    status_code: -2,
-                                    dev_eui: "".to_string(),
-                                    dev_addr: "".to_string(),
+                                    status_code: 0,
+                                    dev_eui: dev_info.dev_eui.clone(),
+                                    dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: 0,
                                     aggregated_data_num: 0,
-                                    timetag: 0,
+                                    timetag: since_the_epoch.as_millis() as u64,
                                 };
+                            let index = self
+                                .active_directory
+                                .iter()
+                                .position(|x| *x.dev_eui == dev_eui)
+                                .unwrap();
+                            self.active_directory.remove(index);
                             return response;
                         }
                     }
@@ -346,7 +403,7 @@ pub(crate) mod e2l_crypto {
                         .expect("Time went backwards");
                     let response =
                         crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::E2lData {
-                            status_code: -1,
+                            status_code: status_code,
                             dev_eui: dev_info.dev_eui.clone(),
                             dev_addr: dev_info.dev_addr.clone(),
                             aggregated_data: aggregation_result,
