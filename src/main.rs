@@ -1,51 +1,74 @@
-mod lorawan_structs;
+mod e2gw_rpc_client;
+mod e2gw_rpc_server;
+mod e2l_crypto;
 mod json_structs;
+mod lorawan_structs;
 mod mqtt_client;
 
 #[macro_use]
 extern crate lazy_static;
 extern crate base64;
 extern crate core;
+extern crate dotenv;
 extern crate getopts;
 extern crate lorawan_encoding;
 extern crate rand;
+extern crate rumqttc;
+extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
-extern crate dotenv;
-extern crate serde;
-extern crate rumqttc;
 
-use lorawan_encoding::parser::{parse, DataHeader, DataPayload, PhyPayload, AsPhyPayloadBytes, MHDRAble, MType};
+extern crate local_ip_address;
+// extern crate elliptic_curve;
+extern crate p256;
+
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::GwLog;
+// E2L
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::init_rpc_client;
+use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
+
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
+use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
+use e2l_crypto::e2l_crypto::e2l_crypto::AggregationResult;
+use tonic::transport::Server;
+
+use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
+use lorawan_encoding::parser::{
+    parse, AsPhyPayloadBytes, DataHeader, DataPayload, MHDRAble, MType, PhyPayload,
+};
+use lorawan_structs::lorawan_structs::lora_structs::{Rxpk, RxpkContent};
+use lorawan_structs::lorawan_structs::{ForwardInfo, ForwardProtocols};
+use mqtt_client::mqtt_structs::mqtt_structs::{MqttJson, MqttVariables};
+use rand::Rng;
+use rumqttc::{Client, MqttOptions, QoS};
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt;
-use std::fmt::{Display};
+use std::fmt::format;
+use std::fmt::Display;
+use std::fmt::{self};
+// use std::io::Read;
 use std::net::UdpSocket;
+use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use rand::Rng;
-use lorawan_structs::lorawan_structs::{ForwardInfo, ForwardProtocols};
-use lorawan_structs::lorawan_structs::lora_structs::{Rxpk, RxpkContent};
-use std::str;
-use rumqttc::{Client, MqttOptions, QoS};
-use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
-use mqtt_client::mqtt_structs::mqtt_structs::{MqttJson, MqttVariables};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
 
-// #[derive(Debug, Serialize, Deserialize)]
-// enum Value {
-//     Null,
-//     Bool(bool),
-//     Number(Number),
-//     String(String),
-//     Array(Vec<Value>),
-//     HashSet(HashSet<String, Value>),
-// }
+// E2L modules
+use e2l_crypto::e2l_crypto::E2L_CRYPTO;
+static EDGE_FRAME_ID: u64 = 1;
+static LEGACY_FRAME_ID: u64 = 2;
+
+static DEFAULT_APP_PORT: u8 = 2;
+static _DEFAULT_E2L_JOIN_PORT: u8 = 3;
+static DEFAULT_E2L_APP_PORT: u8 = 4;
+static _DEFAULT_E2L_COMMAND_PORT: u8 = 5;
 
 lazy_static! {
     static ref PACKETNAMES: HashMap<u8, &'static str> = {
@@ -65,8 +88,8 @@ struct HexSlice<'a>(&'a [u8]);
 
 impl<'a> HexSlice<'a> {
     fn new<T>(data: &'a T) -> HexSlice<'a>
-        where
-            T: ?Sized + AsRef<[u8]> + 'a,
+    where
+        T: ?Sized + AsRef<[u8]> + 'a,
     {
         HexSlice(data.as_ref())
     }
@@ -88,8 +111,8 @@ trait HexDisplayExt {
 }
 
 impl<T> HexDisplayExt for T
-    where
-        T: ?Sized + AsRef<[u8]>,
+where
+    T: ?Sized + AsRef<[u8]>,
 {
     fn hex_display(&self) -> HexSlice<'_> {
         HexSlice::new(self)
@@ -110,7 +133,15 @@ fn get_data_from_json(from_upstream: &[u8]) -> Rxpk {
     data
 }
 
-fn build_json_for_broker(idx: u64, gw_mac: String, data: &RxpkContent, fcnt: Option<u16>, mtype: MType, dev_addr: Option<u32>, dev_eui: Option<u64>) -> String {
+fn build_json_for_broker(
+    idx: u64,
+    gw_mac: String,
+    data: &RxpkContent,
+    fcnt: Option<u16>,
+    mtype: MType,
+    dev_addr: Option<u32>,
+    dev_eui: Option<u64>,
+) -> String {
     let mut mqtt_json = MqttJson::from(data);
     mqtt_json.index = idx;
     if dev_addr.is_some() {
@@ -140,21 +171,21 @@ impl From<&RxpkContent> for MqttJson {
         let rssi_clone: i32;
         if m.rssi.is_some() {
             rssi_clone = m.rssi.unwrap();
-        } else{
+        } else {
             rssi_clone = 0;
         }
 
         let lsnr_clone: f32;
         if m.lsnr.is_some() {
             lsnr_clone = m.lsnr.unwrap();
-        } else{
+        } else {
             lsnr_clone = 0.0;
         }
 
         let chan_clone: u32;
         if m.chan.is_some() {
             chan_clone = m.chan.unwrap();
-        } else{
+        } else {
             chan_clone = 0;
         }
 
@@ -195,8 +226,16 @@ fn charge_environment_variables() -> EnvVariables {
         remote_addr: dotenv::var("NB_HOST").unwrap(),
         bind_addr: dotenv::var("AGENT_BIND_ADDR").unwrap(),
         filters: dotenv::var("FILE_AND_PATH").unwrap(),
-        debug: if dotenv::var("DEBUG").unwrap().is_empty() { false } else { dotenv::var("DEBUG").unwrap().parse().unwrap() },
-        mqtt: if dotenv::var("MQTT").unwrap().is_empty() { false } else { dotenv::var("MQTT").unwrap().parse().unwrap() },
+        debug: if dotenv::var("DEBUG").unwrap().is_empty() {
+            false
+        } else {
+            dotenv::var("DEBUG").unwrap().parse().unwrap()
+        },
+        mqtt: if dotenv::var("MQTT").unwrap().is_empty() {
+            false
+        } else {
+            dotenv::var("MQTT").unwrap().parse().unwrap()
+        },
     }
 }
 
@@ -222,13 +261,18 @@ fn initialize_mqtt(url: &String, port: u16, topic: &String) -> Client {
     return mqtt_client;
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     let env_variables = charge_environment_variables();
     let mqtt_variables = charge_mqtt_variables();
     let mut mqtt_client: Option<Client> = None;
     if env_variables.mqtt == true {
-        mqtt_client = Some(initialize_mqtt(&mqtt_variables.broker_url, mqtt_variables.broker_port.parse().unwrap(), &mqtt_variables.broker_topic));
+        mqtt_client = Some(initialize_mqtt(
+            &mqtt_variables.broker_url,
+            mqtt_variables.broker_port.parse().unwrap(),
+            &mqtt_variables.broker_topic,
+        ));
     }
     let path = env_variables.filters;
     let filters: FilterJson = read_json_from_file((path).to_string());
@@ -240,7 +284,11 @@ fn main() {
     let local_port: i32 = env_variables.local_port.parse().unwrap();
     let remote_port: u16 = env_variables.remote_port.parse().unwrap();
     let remote_host: String = env_variables.remote_addr.parse().unwrap();
-    let bind_addr: String = if env_variables.bind_addr.is_empty() { "127.0.0.1".to_owned() } else { env_variables.bind_addr.parse().unwrap() };
+    let bind_addr: String = if env_variables.bind_addr.is_empty() {
+        "127.0.0.1".to_owned()
+    } else {
+        env_variables.bind_addr.parse().unwrap()
+    };
 
     let mut start_addrs: Vec<u32> = vec![];
     let mut end_addrs: Vec<u32> = vec![];
@@ -248,7 +296,8 @@ fn main() {
     if !filters.dev_addr_intervals.is_empty() {
         for intervals in &filters.dev_addr_intervals {
             if !intervals.dev_addr_end.is_empty() && !intervals.dev_addr_start.is_empty() {
-                start_addrs.push(u32::from_str_radix(intervals.dev_addr_start.as_str(), 16).unwrap());
+                start_addrs
+                    .push(u32::from_str_radix(intervals.dev_addr_start.as_str(), 16).unwrap());
                 end_addrs.push(u32::from_str_radix(intervals.dev_addr_end.as_str(), 16).unwrap())
             } else {
                 start_addrs.push(u32::from_str_radix("00000000", 16).unwrap());
@@ -269,7 +318,8 @@ fn main() {
     if !filters.dev_eui_intervals.is_empty() {
         for intervals in &filters.dev_eui_intervals {
             if !intervals.dev_eui_start.is_empty() && !intervals.dev_eui_end.is_empty() {
-                start_deveui.push(u64::from_str_radix(intervals.dev_eui_start.as_str(), 16).unwrap());
+                start_deveui
+                    .push(u64::from_str_radix(intervals.dev_eui_start.as_str(), 16).unwrap());
                 end_deveui.push(u64::from_str_radix(intervals.dev_eui_end.as_str(), 16).unwrap())
             } else {
                 start_deveui.push(u64::from_str_radix("0007ED0000000000", 16).unwrap());
@@ -289,9 +339,11 @@ fn main() {
         ..Default::default()
     };
     for ele in &fwinfo.start_addr {
-        println!("Allowing Dev addresses from {:x?} to {:x?}",
-                 fwinfo.start_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()],
-                 fwinfo.end_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()]);
+        println!(
+            "Allowing Dev addresses from {:x?} to {:x?}",
+            fwinfo.start_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()],
+            fwinfo.end_addr[fwinfo.start_addr.iter().position(|&x| &x == ele).unwrap()]
+        );
     }
     // zmq::init_zmq();
     print!("List of allowed Device Address : ");
@@ -301,42 +353,66 @@ fn main() {
 
     println!();
     for ele in &fwinfo.start_filter_deveui {
-        println!("Blocking Dev Eui from {:x?} to {:x?}",
-                 fwinfo.start_filter_deveui[fwinfo.start_filter_deveui.iter().position(|&x| &x == ele).unwrap()],
-                 fwinfo.end_filter_deveui[fwinfo.start_filter_deveui.iter().position(|&x| &x == ele).unwrap()]);
+        println!(
+            "Blocking Dev Eui from {:x?} to {:x?}",
+            fwinfo.start_filter_deveui[fwinfo
+                .start_filter_deveui
+                .iter()
+                .position(|&x| &x == ele)
+                .unwrap()],
+            fwinfo.end_filter_deveui[fwinfo
+                .start_filter_deveui
+                .iter()
+                .position(|&x| &x == ele)
+                .unwrap()]
+        );
     }
-    // zmq::init_zmq();
-    forward(&bind_addr, local_port, &remote_host, remote_port, fwinfo, mqtt_client, mqtt_variables.broker_topic);
+
+    forward(
+        &bind_addr,
+        local_port,
+        &remote_host,
+        remote_port,
+        fwinfo,
+        mqtt_client,
+        mqtt_variables.broker_topic,
+    )
+    .await?;
+    Ok(())
 }
 
 fn debug(msg: String) {
-    let debug: bool;
-    unsafe {
-        debug = DEBUG;
-    }
-
-    if debug {
+    if false {
         println!("{}", msg);
+    }
+}
+
+fn info(msg: String) {
+    if true {
+        println!("\nINFO: {}\n", msg);
     }
 }
 
 fn extract_dev_addr_array(v: Vec<u8>) -> [u8; 4] {
     let default_array: [u8; 4] = [0, 0, 0, 0];
-    v.try_into()
-        .unwrap_or(default_array)
+    v.try_into().unwrap_or(default_array)
 }
 
 fn extract_dev_eui_array(v: Vec<u8>) -> [u8; 8] {
     let default_array: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
-    v.try_into()
-        .unwrap_or(default_array)
+    v.try_into().unwrap_or(default_array)
 }
 
-fn check_range<T: Display + PartialEq + PartialOrd>(dev: T, start_intervals: Vec<T>, end_intervals: Vec<T>) -> bool {
+fn check_range<T: Display + PartialEq + PartialOrd>(
+    dev: T,
+    start_intervals: Vec<T>,
+    end_intervals: Vec<T>,
+) -> bool {
     let mut check: bool = false;
     for ele in &start_intervals {
-        if dev >= start_intervals[start_intervals.iter().position(|x| x == ele).unwrap()] &&
-            dev <= end_intervals[start_intervals.iter().position(|x| x == ele).unwrap()] {
+        if dev >= start_intervals[start_intervals.iter().position(|x| x == ele).unwrap()]
+            && dev <= end_intervals[start_intervals.iter().position(|x| x == ele).unwrap()]
+        {
             check = true;
             break;
         }
@@ -344,18 +420,67 @@ fn check_range<T: Display + PartialEq + PartialOrd>(dev: T, start_intervals: Vec
     return check;
 }
 
-fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String){
+fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String) {
     thread::spawn(move || {
-        mqtt_client.unwrap().publish(topic, QoS::AtLeastOnce, false, json.as_bytes()).unwrap();
+        mqtt_client
+            .unwrap()
+            .publish(topic, QoS::AtLeastOnce, false, json.as_bytes())
+            .unwrap();
     });
 }
 
-fn forward(bind_addr: &str, local_port: i32, remote_host: &str, remote_port: u16, fwinfo: ForwardInfo, mqtt_client: Option<Client>, topic: String) {
+async fn forward(
+    bind_addr: &str,
+    local_port: i32,
+    remote_host: &str,
+    remote_port: u16,
+    fwinfo: ForwardInfo<'_>,
+    mqtt_client: Option<Client>,
+    topic: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // GET IP ADDRESS
+    let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
+    let gw_rpc_endpoint_port = format!("50052");
+    let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
+
+    // INIT RPC SERVER
+    let rpc_server = MyEdge2GatewayServer {};
+    let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
+    info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
+    let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
+
+    thread::spawn(move || {
+        let server_future = servicer.serve(rpc_endpoint.parse().unwrap());
+        rt.block_on(server_future)
+            .expect("RPC Server failed to start");
+    });
+
+    // Compute private ECC key
+    let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
+
+    // INIT RPC CLIENT
+    let rpc_remote_host = dotenv::var("RPC_DM_REMOTE_HOST").unwrap();
+    let rpc_remote_port = dotenv::var("RPC_DM_REMOTE_PORT").unwrap();
+    // let rpc_remote_host = "192.168.1.160";
+    // let rpc_remote_port = "50051";
+    let mut rpc_client = init_rpc_client(rpc_remote_host.clone(), rpc_remote_port.clone()).await?;
+
+    let request: tonic::Request<E2gwPubInfo> = tonic::Request::new(E2gwPubInfo {
+        gw_ip_addr: gw_rpc_endpoint_address.clone(),
+        gw_port: gw_rpc_endpoint_port.clone(),
+        e2gw_pub_key: compressed_public_key.into_vec(),
+    });
+    let response = rpc_client.store_e2gw_pub_info(request).await?;
+    let status_code = response.get_ref().status_code;
+    if status_code < 200 || status_code > 299 {
+        return Err("Unable to send public key to the AS".into());
+    }
+
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
     let mut idx: u64 = 0;
-    println!("Listening on {}", local.local_addr().unwrap());
-    println!("Forwarding to {}:{}", remote_host, remote_port);
+    info(format!("Listening on {}", local.local_addr().unwrap()));
+    info(format!("Forwarding to {}:{}", remote_host, remote_port));
 
     let remote_addr = format!("{}:{}", remote_host, remote_port);
 
@@ -380,6 +505,7 @@ fn forward(bind_addr: &str, local_port: i32, remote_host: &str, remote_port: u16
 
     let mut client_map = HashMap::new();
     let mut buf = [0; 64 * 1024];
+
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
 
@@ -472,68 +598,216 @@ fn forward(bind_addr: &str, local_port: i32, remote_host: &str, remote_port: u16
             let mut will_send = true;
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
-                0 => { // PUSH_DATA
+                0 => {
+                    // PUSH_DATA
                     let data_json: Rxpk = get_data_from_json(&to_send[12..]);
-                    debug(format!("Evaluate if forwarding packet from client {:?} to upstream server", data_json.rxpk));
+                    debug(format!(
+                        "Evaluate if forwarding packet from client {:?} to upstream server",
+                        data_json.rxpk
+                    ));
                     if data_json.rxpk.len() == 0 {
                         match fwinfo.forward_protocol {
                             ForwardProtocols::UDP => {
-                                debug(format!("Forwarding Other data to {:x?}", fwinfo.forward_host));
-                            }
-                            // _ => panic!("Forwarding protocol not implemented!"),
+                                debug(format!(
+                                    "Forwarding Other data to {:x?}",
+                                    fwinfo.forward_host
+                                ));
+                            } // _ => panic!("Forwarding protocol not implemented!"),
                         }
                     } else {
                         for packet in data_json.rxpk.iter() {
-                            let data = base64::decode(&packet.data).unwrap();
-                            let data1 = base64::decode(&packet.data).unwrap();
-                            let data2 = base64::decode(&packet.data).unwrap();
+                            let data: Vec<u8> = base64::decode(&packet.data).unwrap();
+                            let data1: Vec<u8> = base64::decode(&packet.data).unwrap();
+                            let data2: Vec<u8> = base64::decode(&packet.data).unwrap();
 
-                            let gwmac = hex::encode(&to_send[4..12]);
+                            let gwmac: String = hex::encode(&to_send[4..12]);
                             debug(format!("Extracted GwMac {:x?}", gwmac));
 
                             if let Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) = parse(data) {
                                 let fhdr = phy.fhdr();
+                                let fcnt = fhdr.fcnt();
                                 let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
+                                let aux: Vec<u8> = dev_addr_vec.clone().into_iter().rev().collect();
+                                let f_port = phy.f_port().unwrap();
+                                let strs: Vec<String> =
+                                    aux.iter().map(|b| format!("{:02X}", b)).collect();
+                                let dev_addr_string = strs.join("");
 
-                                let dev_addr = u32::from_be_bytes(extract_dev_addr_array(dev_addr_vec.into_iter().rev().collect()));
-                                debug(format!("Extracted DevAddr {:x?}", dev_addr));
+                                // let dev_addr_string = format!("{:x}", dev_addr_vec.clone());
+                                let dev_addr = u32::from_be_bytes(extract_dev_addr_array(
+                                    dev_addr_vec.into_iter().rev().collect(),
+                                ));
                                 if mqtt_client.clone().is_some() {
-                                    let json_to_send = build_json_for_broker(idx, gwmac, packet, Some(fhdr.fcnt()), phy.mhdr().mtype(), Option::from(dev_addr), None);
+                                    let json_to_send = build_json_for_broker(
+                                        idx,
+                                        gwmac,
+                                        packet,
+                                        Some(fcnt),
+                                        phy.mhdr().mtype(),
+                                        Option::from(dev_addr),
+                                        None,
+                                    );
                                     idx = (idx + 1) % 18446744073709551615;
                                     debug(format!("Payload Prepared for broker {}", json_to_send));
-                                    send_to_broker(mqtt_client.clone(), topic.clone(), json_to_send);
+                                    send_to_broker(
+                                        mqtt_client.clone(),
+                                        topic.clone(),
+                                        json_to_send,
+                                    );
                                 };
-                                if check_range(dev_addr, fwinfo.start_addr.clone(), fwinfo.end_addr.clone()) || fwinfo.dev_addrs.contains(&dev_addr) {
-                                    match fwinfo.forward_protocol {
-                                        ForwardProtocols::UDP => {
-                                            debug(format!("Forwarding to {:x?}", fwinfo.forward_host));
+                                if true
+                                    || check_range(
+                                        dev_addr,
+                                        fwinfo.start_addr.clone(),
+                                        fwinfo.end_addr.clone(),
+                                    )
+                                    || fwinfo.dev_addrs.contains(&dev_addr)
+                                {
+                                    // Check if enabled E2ED
+                                    let e2ed_enabled: bool;
+                                    unsafe {
+                                        e2ed_enabled = (f_port == DEFAULT_E2L_APP_PORT)
+                                            && E2L_CRYPTO
+                                                .check_e2ed_enabled(dev_addr_string.clone());
+                                    }
+                                    if e2ed_enabled {
+                                        unsafe {
+                                            let ret: Option<AggregationResult> = E2L_CRYPTO
+                                                .process_frame(dev_addr_string.clone(), fcnt, phy);
+                                            // SEND LOG
+                                            let log_request: tonic::Request<GwLog> =
+                                                tonic::Request::new(GwLog {
+                                                    gw_id: gw_rpc_endpoint_address.clone(),
+                                                    dev_addr: dev_addr_string.clone(),
+                                                    log: format!(
+                                                        "Processed Edge Frame from {}",
+                                                        dev_addr.clone()
+                                                    ),
+                                                    frame_type: EDGE_FRAME_ID,
+                                                });
+                                            rpc_client.gw_log(log_request).await?;
+                                            if ret.is_some() {
+                                                // AGGREGATION RESULT
+                                                let ret = ret.unwrap();
+                                                if ret.status_code == 0 {
+                                                    // get epoch time
+                                                    let start = SystemTime::now();
+                                                    let since_the_epoch = start
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .expect("Time went backwards");
+                                                    let edge_data_request: tonic::Request<
+                                                        EdgeData,
+                                                    > = tonic::Request::new(EdgeData {
+                                                        gw_id: gw_rpc_endpoint_address.clone(),
+                                                        dev_eui: ret.dev_eui,
+                                                        dev_addr: ret.dev_addr,
+                                                        aggregated_data: ret.aggregated_data,
+                                                        timetag: since_the_epoch.as_millis() as u64,
+                                                    });
+                                                    let _response = rpc_client
+                                                        .new_data(edge_data_request)
+                                                        .await?;
+                                                }
+                                            } else {
+                                                // info(format!("Device not found or aggregation function not defined!"));
+                                                // info(format!("Device not found or aggregation function not defined!"))
+                                            }
                                         }
-                                        // _ => panic!("Forwarding protocol not implemented!"),
+                                        will_send = false;
+                                    } else {
+                                        match fwinfo.forward_protocol {
+                                            ForwardProtocols::UDP => {
+                                                debug(format!(
+                                                    "Forwarding to {:x?}",
+                                                    fwinfo.forward_host
+                                                ));
+                                                if f_port == DEFAULT_APP_PORT {
+                                                    info(format!(
+                                                        "Forwarding Legacy Frame to {}",
+                                                        dev_addr.clone()
+                                                    ));
+                                                    let log_request: tonic::Request<GwLog> =
+                                                        tonic::Request::new(GwLog {
+                                                            gw_id: gw_rpc_endpoint_address.clone(),
+                                                            dev_addr: dev_addr_string.clone(),
+                                                            log: format!(
+                                                                "Received Legacy Frame from {}",
+                                                                dev_addr.clone()
+                                                            ),
+                                                            frame_type: LEGACY_FRAME_ID,
+                                                        });
+                                                    rpc_client.gw_log(log_request).await?;
+                                                } else {
+                                                    if f_port == DEFAULT_E2L_APP_PORT {
+                                                        // SEND LOG
+                                                        let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
+                                                            gw_id: gw_rpc_endpoint_address.clone(),
+                                                            dev_addr: dev_addr_string.clone(),
+                                                            log: format!(
+                                                                "Received Edge Frame from {} (NOT PROCESSING)",
+                                                                dev_addr.clone()
+                                                            ),
+                                                            frame_type: EDGE_FRAME_ID,
+                                                        });
+                                                        rpc_client.gw_log(log_request).await?;
+                                                    }
+                                                }
+                                            } // _ => panic!("Forwarding protocol not implemented!"),
+                                        }
                                     }
                                 } else {
-                                    debug(format!("Not forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]));
+                                    debug(format!(
+                                        "Not forwarding packet from client {} to upstream server",
+                                        PACKETNAMES[&to_send[3]]
+                                    ));
                                     will_send = false;
                                     break;
                                 }
                             } else if let Ok(PhyPayload::JoinRequest(phy)) = parse(data1) {
                                 let dev_eui_vec = phy.dev_eui().as_ref().to_vec();
-                                let dev_eui = u64::from_be_bytes(extract_dev_eui_array(dev_eui_vec.into_iter().rev().collect()));
+                                let dev_eui = u64::from_be_bytes(extract_dev_eui_array(
+                                    dev_eui_vec.into_iter().rev().collect(),
+                                ));
                                 debug(format!("Extracted DevEui {:x?}", dev_eui));
                                 if mqtt_client.clone().is_some() {
-                                    let json_to_send = build_json_for_broker(idx , gwmac, packet, None, phy.mhdr().mtype(), None, Some(dev_eui));
+                                    let json_to_send = build_json_for_broker(
+                                        idx,
+                                        gwmac,
+                                        packet,
+                                        None,
+                                        phy.mhdr().mtype(),
+                                        None,
+                                        Some(dev_eui),
+                                    );
                                     idx = (idx + 1) % 18446744073709551615;
                                     debug(format!("Payload Prepared for broker {}", json_to_send));
-                                    send_to_broker(mqtt_client.clone(), topic.clone(), json_to_send);
+                                    send_to_broker(
+                                        mqtt_client.clone(),
+                                        topic.clone(),
+                                        json_to_send,
+                                    );
                                 };
-                                if !check_range(dev_eui, fwinfo.start_filter_deveui.clone(), fwinfo.end_filter_deveui.clone()) {
+                                if true
+                                    || !check_range(
+                                        dev_eui,
+                                        fwinfo.start_filter_deveui.clone(),
+                                        fwinfo.end_filter_deveui.clone(),
+                                    )
+                                {
                                     match fwinfo.forward_protocol {
                                         ForwardProtocols::UDP => {
-                                            debug(format!("Forwarding to {:x?}  JoinRequest with len {}", fwinfo.forward_host, phy.as_bytes().len()));
-                                        }
-                                        // _ => panic!("Forwarding protocol not implemented!"),
+                                            debug(format!(
+                                                "Forwarding to {:x?}  JoinRequest with len {}",
+                                                fwinfo.forward_host,
+                                                phy.as_bytes().len()
+                                            ));
+                                        } // _ => panic!("Forwarding protocol not implemented!"),
                                     }
                                 } else {
-                                    debug(format!("Not forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]));
+                                    debug(format!(
+                                        "Not forwarding packet from client {} to upstream server",
+                                        PACKETNAMES[&to_send[3]]
+                                    ));
                                     will_send = false;
                                     break;
                                 }
@@ -553,7 +827,6 @@ fn forward(bind_addr: &str, local_port: i32, remote_host: &str, remote_port: u16
                 }
                 _ => (),
             }
-
             if will_send {
                 match sender.send(to_send.to_vec().clone()) {
                     Ok(_) => {
