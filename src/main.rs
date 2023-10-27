@@ -440,7 +440,7 @@ async fn forward(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GET IP ADDRESS
     let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
-    let gw_rpc_endpoint_port = format!("50052");
+    let gw_rpc_endpoint_port = format!("50053");
     let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
 
     // INIT RPC SERVER
@@ -516,7 +516,7 @@ async fn forward(
 
             let mut ignore_failure = true;
             let client_id = format!("{}", src_addr);
-
+            println!("Debug: creazione thread");
             if remove_existing {
                 debug(format!("Removing existing forwarder from map."));
                 client_map.remove(&client_id);
@@ -550,9 +550,9 @@ async fn forward(
 
                     thread::spawn(move || {
                         let mut from_upstream = [0; 64 * 1024];
-
                         upstream_recv.set_read_timeout(Some(Duration::from_millis(TIMEOUT + 100))).unwrap();
                         loop {
+                            println!("{:?}", upstream_recv.recv_from(&mut from_upstream));
                             match upstream_recv.recv_from(&mut from_upstream) {
                                 Ok((bytes_rcvd, _)) => {
                                     let to_send = from_upstream[..bytes_rcvd].to_vec();
@@ -572,7 +572,10 @@ async fn forward(
                     });
 
                     loop {
-                        match receiver.recv_timeout(Duration::from_millis(TIMEOUT)) {
+                        println!("Prova2");
+                        let aux = receiver.recv_timeout(Duration::from_millis(TIMEOUT));
+                        println!("{:?}", aux);
+                        match aux {
                             Ok(from_client) => {
                                 println!("Forwarding packet from client {} to upstream server", PACKETNAMES[&from_client[3]]);
                                 upstream_send.send_to(from_client.as_slice(), &remote_addr_copy)
@@ -581,6 +584,7 @@ async fn forward(
                             }
                             Err(_) => {
                                 timeouts += 1;
+                                println!("{:?}",timeouts);
                                 if timeouts >= 10 {
                                     debug(format!("Disconnecting forwarder for client {} due to timeout", src_addr));
                                     timed_out.store(true, Ordering::Relaxed);
@@ -599,6 +603,7 @@ async fn forward(
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
                 0 => {
+                    println!("Prova1");
                     // PUSH_DATA
                     let data_json: Rxpk = get_data_from_json(&to_send[12..]);
                     debug(format!(
@@ -606,7 +611,7 @@ async fn forward(
                         data_json.rxpk
                     ));
                     if data_json.rxpk.len() == 0 {
-                        match fwinfo.forward_protocol {
+                        match fwinfo.forward_protocol { // Non deve entrare qui
                             ForwardProtocols::UDP => {
                                 debug(format!(
                                     "Forwarding Other data to {:x?}",
@@ -623,7 +628,7 @@ async fn forward(
                             let gwmac: String = hex::encode(&to_send[4..12]);
                             debug(format!("Extracted GwMac {:x?}", gwmac));
 
-                            if let Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) = parse(data) {
+                            if let Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) = parse(data) { // deve entrare qua (WIN)
                                 let fhdr = phy.fhdr();
                                 let fcnt = fhdr.fcnt();
                                 let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
