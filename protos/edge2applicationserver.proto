@@ -9,6 +9,8 @@ service Edge2ApplicationServer {
   
   rpc gw_log (GWLog) returns (ResponseMessage);
 
+  rpc sys_log (SysLog) returns (ResponseMessage);
+
 } 
 
 message ResponseMessage {
@@ -35,4 +37,13 @@ message GWLog {
   string dev_addr = 2;
   string log = 3;
   uint64 frame_type = 4;  
+}
+
+message SysLog {
+  string gw_id = 1;
+  uint64 memory_usage = 2;
+  uint64 memory_available = 3;
+  float cpu_usage = 4;
+  uint64 data_received = 5;
+  uint64 data_transmitted = 6;
 }
