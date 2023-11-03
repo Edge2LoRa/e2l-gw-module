@@ -5,7 +5,6 @@ mod json_structs;
 mod lorawan_structs;
 mod mqtt_client;
 
-
 #[macro_use]
 extern crate lazy_static;
 extern crate base64;
@@ -48,7 +47,6 @@ use rand::Rng;
 use rumqttc::{Client, MqttOptions, QoS};
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::format;
 use std::fmt::Display;
 use std::fmt::{self};
 // use std::io::Read;
@@ -393,7 +391,7 @@ fn debug(msg: String) {
 
 fn info(msg: String) {
     if true {
-//         println!("\nINFO: {}\n", msg);
+        //         println!("\nINFO: {}\n", msg);
         println!("INFO: {}", msg);
     }
 }
@@ -445,14 +443,15 @@ async fn forward(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GET IP ADDRESS
     let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
-    let gwSys_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
+    let gw_sys_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
     let gw_rpc_endpoint_port = format!("50052");
     let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
 
     // INIT RPC SERVER
     let rpc_server = MyEdge2GatewayServer {};
     let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
-    let rtSys = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object for SysLog");
+    let rt_sys =
+        tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object for SysLog");
     info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
     let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
 
@@ -497,7 +496,6 @@ async fn forward(
         local.local_addr().unwrap()
     ));
 
-
     let (main_sender, main_receiver) = channel::<(_, Vec<u8>)>();
     thread::spawn(move || {
         debug(format!(
@@ -513,25 +511,23 @@ async fn forward(
         }
     });
 
-    let mut rpc_client_sys = init_rpc_client(rpc_remote_host.clone(), rpc_remote_port.clone()).await?;
+    let mut rpc_client_sys =
+        init_rpc_client(rpc_remote_host.clone(), rpc_remote_port.clone()).await?;
 
     thread::spawn(move || {
-        info(format!(
-            "Started new thread to get performance (CPU ; MEM)"
-        ));
+        info(format!("Started new thread to get performance (CPU ; MEM)"));
 
         let mut s = System::new_all();
 
         loop {
-
             s.refresh_memory();
-            let mut used_memory = s.used_memory();
-            let mut available_memory = s.available_memory();
+            let used_memory = s.used_memory();
+            let available_memory = s.available_memory();
             info(format!("{} bytes", used_memory));
             info(format!("{} bytes", available_memory));
 
             s.refresh_cpu(); // Refreshing CPU information.
-            let mut used_cpu = s.global_cpu_info().cpu_usage();
+            let used_cpu = s.global_cpu_info().cpu_usage();
             info(format!("{}%", used_cpu));
 
             /*
@@ -542,22 +538,21 @@ async fn forward(
             }
             */
 
-            let log_request: tonic::Request<SysLog> =
-                tonic::Request::new(SysLog {
-                    gw_id: gwSys_rpc_endpoint_address.clone(),
-                    memory_usage: used_memory,
-                    memory_available: available_memory,
-                    cpu_usage: used_cpu,
-                    data_received: 0,
-                    data_transmitted: 0
-                });
+            let log_request: tonic::Request<SysLog> = tonic::Request::new(SysLog {
+                gw_id: gw_sys_rpc_endpoint_address.clone(),
+                memory_usage: used_memory,
+                memory_available: available_memory,
+                cpu_usage: used_cpu,
+                data_received: 0,
+                data_transmitted: 0,
+            });
             info(format!("{:?}", log_request));
-            let responseSys = rpc_client_sys.sys_log(log_request);
-            rtSys.block_on(responseSys).expect("RPC Server failed to start");
-
+            let response_sys = rpc_client_sys.sys_log(log_request);
+            rt_sys
+                .block_on(response_sys)
+                .expect("RPC Server failed to start");
 
             thread::sleep(Duration::from_millis(1000));
-
         }
     });
 
@@ -737,7 +732,9 @@ async fn forward(
                                                 tonic::Request::new(GwLog {
                                                     gw_id: gw_rpc_endpoint_address.clone(),
                                                     dev_addr: dev_addr_string.clone(),
-                                                    log: format!( "Processed Edge Frame from {}", dev_addr.clone()
+                                                    log: format!(
+                                                        "Processed Edge Frame from {}",
+                                                        dev_addr.clone()
                                                     ),
                                                     frame_type: EDGE_FRAME_ID,
                                                 });

@@ -1,5 +1,5 @@
 pub(crate) mod e2gw_rpc_server {
-    use crate::e2l_crypto::e2l_crypto::{e2l_crypto::E2LCrypto, E2L_CRYPTO};
+    use crate::e2l_crypto::e2l_crypto::E2L_CRYPTO;
 
     // RPC
     use self::edge2_gateway_server::Edge2Gateway;
@@ -53,7 +53,7 @@ pub(crate) mod e2gw_rpc_server {
             let aggregation_function: u32 = inner_request.aggregation_function;
             let window_size: u32 = inner_request.window_size;
             unsafe {
-                let ret = E2L_CRYPTO
+                let _ret = E2L_CRYPTO
                     .update_aggregation_params(aggregation_function as u8, window_size as usize);
             }
             let response = GwResponse {
