@@ -6,10 +6,12 @@ static MAX_ID: u8 = 4;
 pub(crate) mod e2l_crypto {
     // Crypto
     extern crate p256;
+    extern crate serde_json;
 
     use std::ops::Mul;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use hex::FromHex;
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
     use lorawan_encoding::parser::EncryptedDataPayload;
@@ -55,6 +57,61 @@ pub(crate) mod e2l_crypto {
     }
 
     impl E2LCrypto {
+        pub fn load_device_from_file(&mut self, path: String) {
+            if path.is_empty() {
+                return;
+            }
+            let json_file = std::fs::read_to_string(&path);
+            match json_file {
+                Ok(json_to_string) => {
+                    let devices_list: serde_json::Value =
+                        serde_json::from_str(&json_to_string).unwrap();
+                    for device in devices_list.as_array().unwrap() {
+                        let dev_eui: &str = device["ids"]["dev_eui"].as_str().unwrap();
+                        let dev_addr: &str = device["session"]["dev_addr"].as_str().unwrap();
+                        // let device_keys: serde_json::Value = device["session"]["keys"];
+
+                        // Get session keys
+                        let edge_s_enc_key_str = device["session"]["keys"]["app_s_key"]["key"]
+                            .as_str()
+                            .unwrap();
+                        let mut edge_s_enc_key_bytes: [u8; 16] = [0; 16];
+                        hex::decode_to_slice(edge_s_enc_key_str, &mut edge_s_enc_key_bytes)
+                            .expect("Decoding failed");
+                        let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes.clone());
+                        let edge_s_int_key_str = device["session"]["keys"]["f_nwk_s_int_key"]
+                            ["key"]
+                            .as_str()
+                            .unwrap();
+                        let mut edge_s_int_key_bytes: [u8; 16] = [0; 16];
+                        hex::decode_to_slice(edge_s_int_key_str, &mut edge_s_int_key_bytes)
+                            .expect("Decoding failed");
+                        let edge_s_int_key = AES128::from(edge_s_int_key_bytes.clone());
+
+                        // Create fake priv pub device key
+                        let dev_fake_private_key = Some(P256SecretKey::random(&mut OsRng));
+                        let dev_fake_public_key =
+                            Some(dev_fake_private_key.clone().unwrap().public_key()).unwrap();
+
+                        // Create DevInfo struct and add to active directory
+                        let new_dev_info: DevInfo = DevInfo {
+                            dev_eui: dev_eui.to_string(),
+                            dev_addr: dev_addr.to_string(),
+                            dev_public_key: dev_fake_public_key,
+                            edge_s_enc_key: edge_s_enc_key,
+                            edge_s_int_key: edge_s_int_key,
+                            values: Vec::new(),
+                        };
+                        self.active_directory.push(new_dev_info);
+                    }
+                    println!("Devices loaded from file");
+                }
+                Err(err) => {
+                    println!("{:?}", err);
+                    return;
+                }
+            }
+        }
         /*
            @brief: This function multiplies a scalar with a point on the curve
            @param scalar: the scalar to multiply as private key

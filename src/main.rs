@@ -461,6 +461,12 @@ async fn forward(
             .expect("RPC Server failed to start");
     });
 
+    // Load device info from file
+    let device_list_filename = dotenv::var("DEVICE_LIST_FILENAME").unwrap();
+    unsafe {
+        E2L_CRYPTO.load_device_from_file(device_list_filename);
+    }
+
     // Compute private ECC key
     let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
 
