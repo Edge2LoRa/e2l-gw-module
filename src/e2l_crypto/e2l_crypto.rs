@@ -34,6 +34,7 @@ pub(crate) mod e2l_crypto {
         pub dev_eui: String,
         pub dev_addr: String,
         pub aggregated_data: i64,
+        pub fcnts: Vec<u64>,
     }
 
     pub struct DevInfo {
@@ -43,6 +44,7 @@ pub(crate) mod e2l_crypto {
         edge_s_enc_key: AES128,
         edge_s_int_key: AES128,
         values: Vec<i64>,
+        fcnts: Vec<u64>,
     }
 
     #[derive(Default)]
@@ -105,6 +107,7 @@ pub(crate) mod e2l_crypto {
                             edge_s_enc_key: edge_s_enc_key,
                             edge_s_int_key: edge_s_int_key,
                             values: Vec::new(),
+                            fcnts: Vec::new(),
                         };
                         self.active_directory.push(new_dev_info);
                     }
@@ -239,6 +242,7 @@ pub(crate) mod e2l_crypto {
                     edge_s_enc_key: edge_s_enc_key,
                     edge_s_int_key: edge_s_int_key,
                     values: Vec::new(),
+                    fcnts: Vec::new(),
                 };
                 self.active_directory.push(new_dev_info);
             }
@@ -299,6 +303,7 @@ pub(crate) mod e2l_crypto {
                             let sensor_value: i64 = frame_payload_vec[0].into();
                             println!("Edge Frame Payload: {:?}\n", sensor_value);
                             dev_info.values.push(sensor_value);
+                            dev_info.fcnts.push(fcnt as u64);
                             if dev_info.values.len() >= self.window_size {
                                 let aggregation_result: i64;
                                 let mut status_code: i64 = 0;
@@ -346,13 +351,16 @@ pub(crate) mod e2l_crypto {
                                 }
                                 println!("\n\nValues: {:?}", dev_info.values);
                                 println!("Aggregation result: {:?}\n\n", aggregation_result);
+                                let fncts: Vec<u64> = dev_info.fcnts.clone();
                                 dev_info.values = Vec::new();
+                                dev_info.fcnts = Vec::new();
 
                                 return Some(AggregationResult {
                                     status_code: status_code,
                                     dev_eui: dev_info.dev_eui.clone(),
                                     dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: aggregation_result,
+                                    fcnts: fncts,
                                 });
                             }
                         }
@@ -521,6 +529,7 @@ pub(crate) mod e2l_crypto {
                     edge_s_enc_key: edge_s_enc_key,
                     edge_s_int_key: edge_s_int_key,
                     values: Vec::new(),
+                    fcnts: Vec::new(),
                 };
                 self.active_directory.push(new_dev_info);
             }

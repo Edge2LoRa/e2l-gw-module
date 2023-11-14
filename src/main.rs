@@ -66,6 +66,7 @@ static mut DEBUG: bool = false;
 use e2l_crypto::e2l_crypto::E2L_CRYPTO;
 static EDGE_FRAME_ID: u64 = 1;
 static LEGACY_FRAME_ID: u64 = 2;
+static EDGE_FRAME_ID_NOT_PROCESSED: u64 = 3;
 
 static DEFAULT_APP_PORT: u8 = 2;
 static _DEFAULT_E2L_JOIN_PORT: u8 = 3;
@@ -718,6 +719,12 @@ async fn forward(
                                 let is_active: bool;
                                 unsafe { is_active = E2L_CRYPTO.is_active }
                                 if is_active {
+                                    // get epoch time
+                                    let start = SystemTime::now();
+                                    let timetag = start
+                                        .duration_since(UNIX_EPOCH)
+                                        .expect("Time went backwards");
+
                                     // Check if enabled E2ED
                                     let e2ed_enabled: bool;
                                     unsafe {
@@ -739,6 +746,8 @@ async fn forward(
                                                         dev_addr.clone()
                                                     ),
                                                     frame_type: EDGE_FRAME_ID,
+                                                    fcnt: fcnt as u64,
+                                                    timetag: timetag.as_millis() as u64,
                                                 });
                                             rpc_client.gw_log(log_request).await?;
                                             if ret.is_some() {
@@ -757,6 +766,7 @@ async fn forward(
                                                         dev_eui: ret.dev_eui,
                                                         dev_addr: ret.dev_addr,
                                                         aggregated_data: ret.aggregated_data,
+                                                        fcnts: ret.fcnts as Vec<u64>,
                                                         timetag: since_the_epoch.as_millis() as u64,
                                                     });
                                                     let _response = rpc_client
@@ -790,6 +800,8 @@ async fn forward(
                                                                 dev_addr.clone()
                                                             ),
                                                             frame_type: LEGACY_FRAME_ID,
+                                                            fcnt: fcnt as u64,
+                                                            timetag: timetag.as_millis() as u64,
                                                         });
                                                     rpc_client.gw_log(log_request).await?;
                                                 } else {
@@ -802,7 +814,9 @@ async fn forward(
                                                                 "Received Edge Frame from {} (NOT PROCESSING)",
                                                                 dev_addr.clone()
                                                             ),
-                                                            frame_type: EDGE_FRAME_ID,
+                                                            frame_type: EDGE_FRAME_ID_NOT_PROCESSED,
+                                                            fcnt: fcnt as u64,
+                                                    timetag: timetag.as_millis() as u64,
                                                         });
                                                         rpc_client.gw_log(log_request).await?;
                                                     }
