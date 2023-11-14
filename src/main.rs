@@ -444,14 +444,12 @@ async fn forward(
     // GET IP ADDRESS
     let gw_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
     let gw_sys_rpc_endpoint_address = local_ip_address::local_ip().unwrap().to_string();
-    let gw_rpc_endpoint_port = format!("50052");
+    let gw_rpc_endpoint_port = dotenv::var("GW_RPC_ENDPOINT_PORT").unwrap();
     let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
 
     // INIT RPC SERVER
     let rpc_server = MyEdge2GatewayServer {};
     let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
-    let rt_sys =
-        tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object for SysLog");
     info(format!("Starting RPC Server on {}", rpc_endpoint.clone()));
     let servicer = Server::builder().add_service(Edge2GatewayServer::new(rpc_server));
 
@@ -520,10 +518,13 @@ async fn forward(
     let mut rpc_client_sys =
         init_rpc_client(rpc_remote_host.clone(), rpc_remote_port.clone()).await?;
 
+    // Start sys monitoring thread
+    let rt_sys =
+        tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object for SysLog");
     thread::spawn(move || {
         info(format!("Started new thread to get performance (CPU ; MEM)"));
 
-        let mut s = System::new_all();
+        let mut s: System = System::new_all();
 
         loop {
             s.refresh_memory();
