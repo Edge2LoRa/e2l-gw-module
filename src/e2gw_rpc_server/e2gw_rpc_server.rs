@@ -75,5 +75,33 @@ pub(crate) mod e2gw_rpc_server {
                 Ok(Response::new(response))
             }
         }
+
+        async fn add_devices(
+            &self,
+            request: Request<E2lDevicesInfoComplete>,
+        ) -> Result<Response<GwResponse>, Status> {
+            let inner_request = request.into_inner();
+            let device_list = inner_request.device_list;
+            unsafe {
+                let response = E2L_CRYPTO.add_devices(device_list);
+                Ok(Response::new(response))
+            }
+        }
+
+        async fn set_active(
+            &self,
+            request: Request<ActiveFlag>,
+        ) -> Result<Response<GwResponse>, Status> {
+            let inner_request = request.into_inner();
+            let is_active = inner_request.is_active;
+            unsafe {
+                E2L_CRYPTO.set_active(is_active);
+            }
+            let response = GwResponse {
+                status_code: 0,
+                message: "Parameters Updated!".to_string(),
+            };
+            Ok(Response::new(response))
+        }
     }
 }

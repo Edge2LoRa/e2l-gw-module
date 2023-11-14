@@ -11,7 +11,6 @@ pub(crate) mod e2l_crypto {
     use std::ops::Mul;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use hex::FromHex;
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
     use lorawan_encoding::parser::EncryptedDataPayload;
@@ -54,10 +53,15 @@ pub(crate) mod e2l_crypto {
         pub active_directory: Vec<DevInfo>,
         pub aggregation_function: u8,
         pub window_size: usize,
+        pub is_active: bool,
     }
 
     impl E2LCrypto {
-        pub fn load_device_from_file(&mut self, path: String) {
+        pub fn set_active(&mut self, is_active: bool) {
+            self.is_active = is_active;
+        }
+
+        pub fn _load_device_from_file(&mut self, path: String) {
             if path.is_empty() {
                 return;
             }
@@ -486,6 +490,47 @@ pub(crate) mod e2l_crypto {
             };
             return response;
         }
+
+        pub fn add_devices(
+            &mut self,
+            device_list: Vec<crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::Device>,
+        ) -> crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::GwResponse {
+            for device in device_list {
+                // Create fake priv pub device key
+                let dev_fake_private_key = Some(P256SecretKey::random(&mut OsRng));
+                let dev_fake_public_key =
+                    Some(dev_fake_private_key.clone().unwrap().public_key()).unwrap();
+                let dev_eui = device.dev_eui;
+                let dev_addr = device.dev_addr;
+                let edge_s_enc_key_str = device.edge_s_enc_key;
+                let mut edge_s_enc_key_bytes: [u8; 16] = [0; 16];
+                hex::decode_to_slice(edge_s_enc_key_str, &mut edge_s_enc_key_bytes)
+                    .expect("Decoding failed");
+                let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes.clone());
+                let edge_s_int_key_str = device.edge_s_int_key;
+                let mut edge_s_int_key_bytes: [u8; 16] = [0; 16];
+                hex::decode_to_slice(edge_s_int_key_str, &mut edge_s_int_key_bytes)
+                    .expect("Decoding failed");
+                let edge_s_int_key = AES128::from(edge_s_int_key_bytes.clone());
+
+                // Create DevInfo struct and add to active directory
+                let new_dev_info: DevInfo = DevInfo {
+                    dev_eui: dev_eui,
+                    dev_addr: dev_addr,
+                    dev_public_key: dev_fake_public_key,
+                    edge_s_enc_key: edge_s_enc_key,
+                    edge_s_int_key: edge_s_int_key,
+                    values: Vec::new(),
+                };
+                self.active_directory.push(new_dev_info);
+            }
+
+            let response = crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::GwResponse {
+                status_code: 0,
+                message: "Devices added".to_string(),
+            };
+            return response;
+        }
     }
 }
 
@@ -496,4 +541,5 @@ pub static mut E2L_CRYPTO: E2LCrypto = E2LCrypto {
     active_directory: Vec::new(),
     aggregation_function: AVG_ID,
     window_size: 5,
+    is_active: true,
 };

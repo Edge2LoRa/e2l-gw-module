@@ -460,10 +460,10 @@ async fn forward(
     });
 
     // Load device info from file
-    let device_list_filename = dotenv::var("DEVICE_LIST_FILENAME").unwrap();
-    unsafe {
-        E2L_CRYPTO.load_device_from_file(device_list_filename);
-    }
+    // let device_list_filename = dotenv::var("DEVICE_LIST_FILENAME").unwrap();
+    // unsafe {
+    //     E2L_CRYPTO.load_device_from_file(device_list_filename);
+    // }
 
     // Compute private ECC key
     let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
@@ -715,14 +715,9 @@ async fn forward(
                                         json_to_send,
                                     );
                                 };
-                                if true
-                                    || check_range(
-                                        dev_addr,
-                                        fwinfo.start_addr.clone(),
-                                        fwinfo.end_addr.clone(),
-                                    )
-                                    || fwinfo.dev_addrs.contains(&dev_addr)
-                                {
+                                let is_active: bool;
+                                unsafe { is_active = E2L_CRYPTO.is_active }
+                                if is_active {
                                     // Check if enabled E2ED
                                     let e2ed_enabled: bool;
                                     unsafe {
