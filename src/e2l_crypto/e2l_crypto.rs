@@ -215,7 +215,6 @@ pub(crate) mod e2l_crypto {
             let edge_s_int_key_bytes: [u8; 16] =
                 edge_s_int_key_hash_result[0..16].try_into().unwrap();
             let edge_s_int_key = AES128::from(edge_s_int_key_bytes);
-            println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
 
             // Compute Edge Session Encryption Key
             let mut edge_s_key_enc_bytes_before_hash = edge_s_key_bytes.clone();
@@ -224,7 +223,6 @@ pub(crate) mod e2l_crypto {
             let edge_s_enc_key_bytes: [u8; 16] =
                 edge_s_enc_key_hash_result[0..16].try_into().unwrap();
             let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes);
-            println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
 
             // Add Info to dev info struct
             let mut dev_info_found = false;
