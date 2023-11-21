@@ -37,6 +37,11 @@ pub(crate) mod e2l_crypto {
         pub fcnts: Vec<u64>,
     }
 
+    pub struct ProcessedFrameResult {
+        pub timetag: u64,
+        pub aggregation_option: Option<AggregationResult>,
+    }
+
     pub struct DevInfo {
         dev_eui: String,
         dev_addr: String,
@@ -282,7 +287,7 @@ pub(crate) mod e2l_crypto {
             dev_addr: String,
             fcnt: u16,
             phy: EncryptedDataPayload<Vec<u8>, DefaultFactory>,
-        ) -> Option<AggregationResult> {
+        ) -> Option<ProcessedFrameResult> {
             let dev_info: &mut DevInfo;
             let mut dev_info_found = false;
             for dev_info_iter in self.active_directory.iter_mut() {
@@ -291,16 +296,23 @@ pub(crate) mod e2l_crypto {
                     dev_info_found = true;
                     // GET KEYS
                     let edge_s_enc_key: AES128 = dev_info.edge_s_enc_key.clone();
+                    println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
+                    let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
                     // let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
                     let decrypted_data_payload = phy
-                        .decrypt(Some(&edge_s_enc_key), Some(&edge_s_enc_key), fcnt.into())
+                        .decrypt(Some(&edge_s_int_key), Some(&edge_s_enc_key), fcnt.into())
                         .unwrap();
 
                     let frame_payload_result = decrypted_data_payload.frm_payload().unwrap();
                     match frame_payload_result {
                         lorawan_encoding::parser::FRMPayload::Data(frame_payload) => {
                             let frame_payload_vec: Vec<u8> = frame_payload.to_vec();
-                            let sensor_value: i64 = frame_payload_vec[0].into();
+                            let frame_payload_str = String::from_utf8(frame_payload_vec.clone())
+                                .expect("Failed to Decode Frame Payload");
+                            let timetag: u64 = frame_payload_str.parse().unwrap();
+                            println!("\nTimeTag: {:?}\n", timetag);
+                            let last_index = frame_payload_vec.len() - 1;
+                            let sensor_value: i64 = frame_payload_vec[last_index].into();
                             println!("Edge Frame Payload: {:?}\n", sensor_value);
                             dev_info.values.push(sensor_value);
                             dev_info.fcnts.push(fcnt as u64);
@@ -354,13 +366,23 @@ pub(crate) mod e2l_crypto {
                                 let fncts: Vec<u64> = dev_info.fcnts.clone();
                                 dev_info.values = Vec::new();
                                 dev_info.fcnts = Vec::new();
-
-                                return Some(AggregationResult {
+                                let aggregation_result = AggregationResult {
                                     status_code: status_code,
                                     dev_eui: dev_info.dev_eui.clone(),
                                     dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: aggregation_result,
                                     fcnts: fncts,
+                                };
+                                let return_value: ProcessedFrameResult = ProcessedFrameResult {
+                                    timetag: timetag,
+                                    aggregation_option: Some(aggregation_result),
+                                };
+
+                                return Some(return_value);
+                            } else {
+                                return Some(ProcessedFrameResult {
+                                    timetag: timetag,
+                                    aggregation_option: None,
                                 });
                             }
                         }
@@ -369,7 +391,6 @@ pub(crate) mod e2l_crypto {
                             return None;
                         }
                     };
-                    break;
                 }
             }
             if !dev_info_found {
@@ -510,15 +531,15 @@ pub(crate) mod e2l_crypto {
                     Some(dev_fake_private_key.clone().unwrap().public_key()).unwrap();
                 let dev_eui = device.dev_eui;
                 let dev_addr = device.dev_addr;
-                let edge_s_enc_key_str = device.edge_s_enc_key;
-                let mut edge_s_enc_key_bytes: [u8; 16] = [0; 16];
-                hex::decode_to_slice(edge_s_enc_key_str, &mut edge_s_enc_key_bytes)
-                    .expect("Decoding failed");
+                let edge_s_enc_key_vec = device.edge_s_enc_key;
+                println!("\n\nEdge S Enc Key: {:?}", edge_s_enc_key_vec.clone());
+                let edge_s_enc_key_bytes: [u8; 16] = edge_s_enc_key_vec.try_into().unwrap();
+                println!("\n\nEdge S Enc Key bytes: {:?}", edge_s_enc_key_bytes);
                 let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes.clone());
-                let edge_s_int_key_str = device.edge_s_int_key;
-                let mut edge_s_int_key_bytes: [u8; 16] = [0; 16];
-                hex::decode_to_slice(edge_s_int_key_str, &mut edge_s_int_key_bytes)
-                    .expect("Decoding failed");
+                println!("\n\nEdge S Enc Key: {:?}", edge_s_enc_key);
+
+                let edge_s_int_key_vec = device.edge_s_int_key;
+                let edge_s_int_key_bytes: [u8; 16] = edge_s_int_key_vec.try_into().unwrap();
                 let edge_s_int_key = AES128::from(edge_s_int_key_bytes.clone());
 
                 // Create DevInfo struct and add to active directory

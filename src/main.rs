@@ -22,6 +22,7 @@ extern crate local_ip_address;
 // extern crate elliptic_curve;
 extern crate p256;
 
+use e2l_crypto::e2l_crypto::e2l_crypto::ProcessedFrameResult;
 use sysinfo::{CpuExt, System, SystemExt};
 
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
@@ -678,136 +679,151 @@ async fn forward(
                     } else {
                         for packet in data_json.rxpk.iter() {
                             let data: Vec<u8> = base64::decode(&packet.data).unwrap();
-                            let data1: Vec<u8> = base64::decode(&packet.data).unwrap();
-                            let data2: Vec<u8> = base64::decode(&packet.data).unwrap();
 
                             let gwmac: String = hex::encode(&to_send[4..12]);
                             debug(format!("Extracted GwMac {:x?}", gwmac));
 
-                            if let Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) = parse(data) {
-                                let fhdr = phy.fhdr();
-                                let fcnt = fhdr.fcnt();
-                                let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
-                                let aux: Vec<u8> = dev_addr_vec.clone().into_iter().rev().collect();
-                                let f_port = phy.f_port().unwrap();
-                                let strs: Vec<String> =
-                                    aux.iter().map(|b| format!("{:02X}", b)).collect();
-                                let dev_addr_string = strs.join("");
+                            let parsed_data = parse(data.clone());
+                            match parsed_data {
+                                Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) => {
+                                    let fhdr = phy.fhdr();
+                                    let fcnt = fhdr.fcnt();
+                                    let dev_addr_vec = fhdr.dev_addr().as_ref().to_vec();
+                                    let aux: Vec<u8> =
+                                        dev_addr_vec.clone().into_iter().rev().collect();
+                                    let f_port = phy.f_port().unwrap();
+                                    let strs: Vec<String> =
+                                        aux.iter().map(|b| format!("{:02X}", b)).collect();
+                                    let dev_addr_string = strs.join("");
 
-                                // let dev_addr_string = format!("{:x}", dev_addr_vec.clone());
-                                let dev_addr = u32::from_be_bytes(extract_dev_addr_array(
-                                    dev_addr_vec.into_iter().rev().collect(),
-                                ));
-                                if mqtt_client.clone().is_some() {
-                                    let json_to_send = build_json_for_broker(
-                                        idx,
-                                        gwmac,
-                                        packet,
-                                        Some(fcnt),
-                                        phy.mhdr().mtype(),
-                                        Option::from(dev_addr),
-                                        None,
-                                    );
-                                    idx = (idx + 1) % 18446744073709551615;
-                                    debug(format!("Payload Prepared for broker {}", json_to_send));
-                                    send_to_broker(
-                                        mqtt_client.clone(),
-                                        topic.clone(),
-                                        json_to_send,
-                                    );
-                                };
-                                let is_active: bool;
-                                unsafe { is_active = E2L_CRYPTO.is_active }
-                                if is_active {
-                                    // get epoch time
-                                    let start = SystemTime::now();
-                                    let timetag = start
-                                        .duration_since(UNIX_EPOCH)
-                                        .expect("Time went backwards");
+                                    // let dev_addr_string = format!("{:x}", dev_addr_vec.clone());
+                                    let dev_addr = u32::from_be_bytes(extract_dev_addr_array(
+                                        dev_addr_vec.into_iter().rev().collect(),
+                                    ));
+                                    if mqtt_client.clone().is_some() {
+                                        let json_to_send = build_json_for_broker(
+                                            idx,
+                                            gwmac,
+                                            packet,
+                                            Some(fcnt),
+                                            phy.mhdr().mtype(),
+                                            Option::from(dev_addr),
+                                            None,
+                                        );
+                                        idx = (idx + 1) % 18446744073709551615;
+                                        debug(format!(
+                                            "Payload Prepared for broker {}",
+                                            json_to_send
+                                        ));
+                                        send_to_broker(
+                                            mqtt_client.clone(),
+                                            topic.clone(),
+                                            json_to_send,
+                                        );
+                                    };
+                                    let is_active: bool;
+                                    unsafe { is_active = E2L_CRYPTO.is_active }
+                                    if is_active {
+                                        // get epoch time
+                                        let start = SystemTime::now();
+                                        let timetag = start
+                                            .duration_since(UNIX_EPOCH)
+                                            .expect("Time went backwards");
 
-                                    // Check if enabled E2ED
-                                    let e2ed_enabled: bool;
-                                    unsafe {
-                                        e2ed_enabled = (f_port == DEFAULT_E2L_APP_PORT)
-                                            && E2L_CRYPTO
-                                                .check_e2ed_enabled(dev_addr_string.clone());
-                                    }
-                                    if e2ed_enabled {
+                                        // Check if enabled E2ED
+                                        let e2ed_enabled: bool;
                                         unsafe {
-                                            let ret: Option<AggregationResult> = E2L_CRYPTO
-                                                .process_frame(dev_addr_string.clone(), fcnt, phy);
-                                            // SEND LOG
-                                            let log_request: tonic::Request<GwLog> =
-                                                tonic::Request::new(GwLog {
-                                                    gw_id: gw_rpc_endpoint_address.clone(),
-                                                    dev_addr: dev_addr_string.clone(),
-                                                    log: format!(
-                                                        "Processed Edge Frame from {}",
-                                                        dev_addr.clone()
-                                                    ),
-                                                    frame_type: EDGE_FRAME_ID,
-                                                    fcnt: fcnt as u64,
-                                                    timetag: timetag.as_millis() as u64,
-                                                });
-                                            rpc_client.gw_log(log_request).await?;
-                                            if ret.is_some() {
-                                                // AGGREGATION RESULT
-                                                let ret = ret.unwrap();
-                                                if ret.status_code == 0 {
-                                                    // get epoch time
-                                                    let start = SystemTime::now();
-                                                    let since_the_epoch = start
-                                                        .duration_since(UNIX_EPOCH)
-                                                        .expect("Time went backwards");
-                                                    let edge_data_request: tonic::Request<
-                                                        EdgeData,
-                                                    > = tonic::Request::new(EdgeData {
-                                                        gw_id: gw_rpc_endpoint_address.clone(),
-                                                        dev_eui: ret.dev_eui,
-                                                        dev_addr: ret.dev_addr,
-                                                        aggregated_data: ret.aggregated_data,
-                                                        fcnts: ret.fcnts as Vec<u64>,
-                                                        timetag: since_the_epoch.as_millis() as u64,
-                                                    });
-                                                    let _response = rpc_client
-                                                        .new_data(edge_data_request)
-                                                        .await?;
-                                                }
-                                            } else {
-                                                // info(format!("Device not found or aggregation function not defined!"));
-                                                // info(format!("Device not found or aggregation function not defined!"))
-                                            }
+                                            e2ed_enabled = (f_port == DEFAULT_E2L_APP_PORT)
+                                                && E2L_CRYPTO
+                                                    .check_e2ed_enabled(dev_addr_string.clone());
                                         }
-                                        will_send = false;
-                                    } else {
-                                        match fwinfo.forward_protocol {
-                                            ForwardProtocols::UDP => {
-                                                debug(format!(
-                                                    "Forwarding to {:x?}",
-                                                    fwinfo.forward_host
-                                                ));
-                                                if f_port == DEFAULT_APP_PORT {
-                                                    info(format!(
-                                                        "Forwarding Legacy Frame to {}",
-                                                        dev_addr.clone()
-                                                    ));
+                                        if e2ed_enabled {
+                                            unsafe {
+                                                let ret: Option<ProcessedFrameResult> = E2L_CRYPTO
+                                                    .process_frame(
+                                                        dev_addr_string.clone(),
+                                                        fcnt,
+                                                        phy,
+                                                    );
+                                                if ret.is_some() {
+                                                    let processed_frame_result: ProcessedFrameResult = ret.unwrap();
+                                                    // SEND LOG
                                                     let log_request: tonic::Request<GwLog> =
                                                         tonic::Request::new(GwLog {
                                                             gw_id: gw_rpc_endpoint_address.clone(),
                                                             dev_addr: dev_addr_string.clone(),
                                                             log: format!(
-                                                                "Received Legacy Frame from {}",
+                                                                "Processed Edge Frame from {}",
                                                                 dev_addr.clone()
                                                             ),
-                                                            frame_type: LEGACY_FRAME_ID,
+                                                            frame_type: EDGE_FRAME_ID,
                                                             fcnt: fcnt as u64,
-                                                            timetag: timetag.as_millis() as u64,
+                                                            timetag: processed_frame_result.timetag,
                                                         });
                                                     rpc_client.gw_log(log_request).await?;
+                                                    // AGGREGATION RESULT
+                                                    if processed_frame_result
+                                                        .aggregation_option
+                                                        .is_some()
+                                                    {
+                                                        let ret = processed_frame_result
+                                                            .aggregation_option
+                                                            .unwrap();
+                                                        // get epoch time
+                                                        let start = SystemTime::now();
+                                                        let since_the_epoch = start
+                                                            .duration_since(UNIX_EPOCH)
+                                                            .expect("Time went backwards");
+                                                        let edge_data_request: tonic::Request<
+                                                            EdgeData,
+                                                        > = tonic::Request::new(EdgeData {
+                                                            gw_id: gw_rpc_endpoint_address.clone(),
+                                                            dev_eui: ret.dev_eui,
+                                                            dev_addr: ret.dev_addr,
+                                                            aggregated_data: ret.aggregated_data,
+                                                            fcnts: ret.fcnts as Vec<u64>,
+                                                            timetag: since_the_epoch.as_millis()
+                                                                as u64,
+                                                        });
+                                                        let _response = rpc_client
+                                                            .new_data(edge_data_request)
+                                                            .await?;
+                                                    }
                                                 } else {
-                                                    if f_port == DEFAULT_E2L_APP_PORT {
-                                                        // SEND LOG
-                                                        let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
+                                                    // info(format!("Device not found or aggregation function not defined!"));
+                                                }
+                                            }
+                                            will_send = false;
+                                        } else {
+                                            match fwinfo.forward_protocol {
+                                                ForwardProtocols::UDP => {
+                                                    debug(format!(
+                                                        "Forwarding to {:x?}",
+                                                        fwinfo.forward_host
+                                                    ));
+                                                    if f_port == DEFAULT_APP_PORT {
+                                                        info(format!(
+                                                            "Forwarding Legacy Frame to {}",
+                                                            dev_addr.clone()
+                                                        ));
+                                                        let log_request: tonic::Request<GwLog> =
+                                                            tonic::Request::new(GwLog {
+                                                                gw_id: gw_rpc_endpoint_address
+                                                                    .clone(),
+                                                                dev_addr: dev_addr_string.clone(),
+                                                                log: format!(
+                                                                    "Received Legacy Frame from {}",
+                                                                    dev_addr.clone()
+                                                                ),
+                                                                frame_type: LEGACY_FRAME_ID,
+                                                                fcnt: fcnt as u64,
+                                                                timetag: timetag.as_millis() as u64,
+                                                            });
+                                                        rpc_client.gw_log(log_request).await?;
+                                                    } else {
+                                                        if f_port == DEFAULT_E2L_APP_PORT {
+                                                            // SEND LOG
+                                                            let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
                                                             gw_id: gw_rpc_endpoint_address.clone(),
                                                             dev_addr: dev_addr_string.clone(),
                                                             log: format!(
@@ -816,80 +832,87 @@ async fn forward(
                                                             ),
                                                             frame_type: EDGE_FRAME_ID_NOT_PROCESSED,
                                                             fcnt: fcnt as u64,
-                                                    timetag: timetag.as_millis() as u64,
+                                                            timetag: timetag.as_millis() as u64,
                                                         });
-                                                        rpc_client.gw_log(log_request).await?;
+                                                            rpc_client.gw_log(log_request).await?;
+                                                        }
                                                     }
-                                                }
+                                                } // _ => panic!("Forwarding protocol not implemented!"),
+                                            }
+                                        }
+                                    } else {
+                                        debug(format!(
+                                        "Not forwarding packet from client {} to upstream server",
+                                        PACKETNAMES[&to_send[3]]
+                                    ));
+                                        will_send = false;
+                                        break;
+                                    }
+                                }
+                                Ok(PhyPayload::JoinRequest(phy)) => {
+                                    let dev_eui_vec = phy.dev_eui().as_ref().to_vec();
+                                    let dev_eui = u64::from_be_bytes(extract_dev_eui_array(
+                                        dev_eui_vec.into_iter().rev().collect(),
+                                    ));
+                                    debug(format!("Extracted DevEui {:x?}", dev_eui));
+                                    if mqtt_client.clone().is_some() {
+                                        let json_to_send = build_json_for_broker(
+                                            idx,
+                                            gwmac,
+                                            packet,
+                                            None,
+                                            phy.mhdr().mtype(),
+                                            None,
+                                            Some(dev_eui),
+                                        );
+                                        idx = (idx + 1) % 18446744073709551615;
+                                        debug(format!(
+                                            "Payload Prepared for broker {}",
+                                            json_to_send
+                                        ));
+                                        send_to_broker(
+                                            mqtt_client.clone(),
+                                            topic.clone(),
+                                            json_to_send,
+                                        );
+                                    };
+                                    if true
+                                        || !check_range(
+                                            dev_eui,
+                                            fwinfo.start_filter_deveui.clone(),
+                                            fwinfo.end_filter_deveui.clone(),
+                                        )
+                                    {
+                                        match fwinfo.forward_protocol {
+                                            ForwardProtocols::UDP => {
+                                                debug(format!(
+                                                    "Forwarding to {:x?}  JoinRequest with len {}",
+                                                    fwinfo.forward_host,
+                                                    phy.as_bytes().len()
+                                                ));
                                             } // _ => panic!("Forwarding protocol not implemented!"),
                                         }
-                                    }
-                                } else {
-                                    debug(format!(
+                                    } else {
+                                        debug(format!(
                                         "Not forwarding packet from client {} to upstream server",
                                         PACKETNAMES[&to_send[3]]
                                     ));
-                                    will_send = false;
-                                    break;
-                                }
-                            } else if let Ok(PhyPayload::JoinRequest(phy)) = parse(data1) {
-                                let dev_eui_vec = phy.dev_eui().as_ref().to_vec();
-                                let dev_eui = u64::from_be_bytes(extract_dev_eui_array(
-                                    dev_eui_vec.into_iter().rev().collect(),
-                                ));
-                                debug(format!("Extracted DevEui {:x?}", dev_eui));
-                                if mqtt_client.clone().is_some() {
-                                    let json_to_send = build_json_for_broker(
-                                        idx,
-                                        gwmac,
-                                        packet,
-                                        None,
-                                        phy.mhdr().mtype(),
-                                        None,
-                                        Some(dev_eui),
-                                    );
-                                    idx = (idx + 1) % 18446744073709551615;
-                                    debug(format!("Payload Prepared for broker {}", json_to_send));
-                                    send_to_broker(
-                                        mqtt_client.clone(),
-                                        topic.clone(),
-                                        json_to_send,
-                                    );
-                                };
-                                if true
-                                    || !check_range(
-                                        dev_eui,
-                                        fwinfo.start_filter_deveui.clone(),
-                                        fwinfo.end_filter_deveui.clone(),
-                                    )
-                                {
-                                    match fwinfo.forward_protocol {
-                                        ForwardProtocols::UDP => {
-                                            debug(format!(
-                                                "Forwarding to {:x?}  JoinRequest with len {}",
-                                                fwinfo.forward_host,
-                                                phy.as_bytes().len()
-                                            ));
-                                        } // _ => panic!("Forwarding protocol not implemented!"),
+                                        will_send = false;
+                                        break;
                                     }
-                                } else {
-                                    debug(format!(
-                                        "Not forwarding packet from client {} to upstream server",
-                                        PACKETNAMES[&to_send[3]]
-                                    ));
+                                }
+                                Ok(_) => {}
+                                Err(_) => {
+                                    debug(format!("Not forwarding packet from client {} to upstream server, Unknown Packet with size {}, data: {:x?}", PACKETNAMES[&to_send[3]], data.len(), data));
                                     will_send = false;
                                     break;
+                                    // match fwinfo.forward_protocol {
+                                    //     ForwardProtocols::UDP => {
+                                    //         debug(format!("Forwarding UnknownData data to {:x?}, size: {}", fwinfo.forward_host, phy.as_bytes().len()));
+                                    //     }
+                                    //     // _ => panic!("Forwarding protocol not implemented!"),
+                                    // }
                                 }
-                            } else {
-                                debug(format!("Not forwarding packet from client {} to upstream server, Unknown Packet with size {}, data: {:x?}", PACKETNAMES[&to_send[3]], data2.len(), data2));
-                                will_send = false;
-                                break;
-                                // match fwinfo.forward_protocol {
-                                //     ForwardProtocols::UDP => {
-                                //         debug(format!("Forwarding UnknownData data to {:x?}, size: {}", fwinfo.forward_host, phy.as_bytes().len()));
-                                //     }
-                                //     // _ => panic!("Forwarding protocol not implemented!"),
-                                // }
                             }
                         }
                     }
