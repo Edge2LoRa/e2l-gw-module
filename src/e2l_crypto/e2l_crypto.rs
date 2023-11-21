@@ -305,10 +305,8 @@ pub(crate) mod e2l_crypto {
                             let frame_payload_str = String::from_utf8(frame_payload_vec.clone())
                                 .expect("Failed to Decode Frame Payload");
                             let timetag: u64 = frame_payload_str.parse().unwrap();
-                            println!("\nTimeTag: {:?}\n", timetag);
                             let last_index = frame_payload_vec.len() - 1;
                             let sensor_value: i64 = frame_payload_vec[last_index].into();
-                            println!("Edge Frame Payload: {:?}\n", sensor_value);
                             dev_info.values.push(sensor_value);
                             dev_info.fcnts.push(fcnt as u64);
                             if dev_info.values.len() >= self.window_size {
@@ -523,11 +521,8 @@ pub(crate) mod e2l_crypto {
                 let dev_eui = device.dev_eui;
                 let dev_addr = device.dev_addr;
                 let edge_s_enc_key_vec = device.edge_s_enc_key;
-                println!("\n\nEdge S Enc Key: {:?}", edge_s_enc_key_vec.clone());
                 let edge_s_enc_key_bytes: [u8; 16] = edge_s_enc_key_vec.try_into().unwrap();
-                println!("\n\nEdge S Enc Key bytes: {:?}", edge_s_enc_key_bytes);
                 let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes.clone());
-                println!("\n\nEdge S Enc Key: {:?}", edge_s_enc_key);
 
                 let edge_s_int_key_vec = device.edge_s_int_key;
                 let edge_s_int_key_bytes: [u8; 16] = edge_s_int_key_vec.try_into().unwrap();
