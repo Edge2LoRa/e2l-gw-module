@@ -289,16 +289,13 @@ pub(crate) mod e2l_crypto {
             phy: EncryptedDataPayload<Vec<u8>, DefaultFactory>,
         ) -> Option<ProcessedFrameResult> {
             let dev_info: &mut DevInfo;
-            let mut dev_info_found = false;
             for dev_info_iter in self.active_directory.iter_mut() {
                 if dev_info_iter.dev_addr == dev_addr {
                     dev_info = dev_info_iter;
-                    dev_info_found = true;
+                    // dev_info_found = true;
                     // GET KEYS
                     let edge_s_enc_key: AES128 = dev_info.edge_s_enc_key.clone();
-                    println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
                     let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
-                    // let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
                     let decrypted_data_payload = phy
                         .decrypt(Some(&edge_s_int_key), Some(&edge_s_enc_key), fcnt.into())
                         .unwrap();
@@ -393,10 +390,6 @@ pub(crate) mod e2l_crypto {
                     };
                 }
             }
-            if !dev_info_found {
-                return None;
-            }
-
             return None;
         }
 
