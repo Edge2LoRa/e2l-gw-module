@@ -74,6 +74,11 @@ static _DEFAULT_E2L_JOIN_PORT: u8 = 3;
 static DEFAULT_E2L_APP_PORT: u8 = 4;
 static _DEFAULT_E2L_COMMAND_PORT: u8 = 5;
 
+static mut LEGACY_FRAMES_NUM: u64 = 0;
+static mut LEGACY_FRAMES_LAST: u64 = 0;
+static mut EDGE_FRAMES_NUM: u64 = 0;
+static mut EDGE_FRAMES_LAST: u64 = 0;
+
 lazy_static! {
     static ref PACKETNAMES: HashMap<u8, &'static str> = {
         let mut m = HashMap::new();
@@ -532,12 +537,12 @@ async fn forward(
             s.refresh_memory();
             let used_memory = s.used_memory();
             let available_memory = s.available_memory();
-            info(format!("{} bytes", used_memory));
-            info(format!("{} bytes", available_memory));
+            debug(format!("{} bytes", used_memory));
+            debug(format!("{} bytes", available_memory));
 
             s.refresh_cpu(); // Refreshing CPU information.
             let used_cpu = s.global_cpu_info().cpu_usage();
-            info(format!("{}%", used_cpu));
+            debug(format!("{}%", used_cpu));
 
             /*
             // Network interfaces name, data received and data transmitted:
@@ -555,13 +560,25 @@ async fn forward(
                 data_received: 0,
                 data_transmitted: 0,
             });
-            info(format!("{:?}", log_request));
+            debug(format!("{:?}", log_request));
             let response_sys = rpc_client_sys.sys_log(log_request);
             rt_sys
                 .block_on(response_sys)
                 .expect("RPC Server failed to start");
 
-            thread::sleep(Duration::from_millis(1000));
+            thread::sleep(Duration::from_millis(5000));
+        }
+    });
+    // Start legacy frame counter loop
+    thread::spawn(move || {
+        loop {
+            unsafe{
+                info(format!("Received LEGACY FRAMES: {}", LEGACY_FRAMES_NUM - LEGACY_FRAMES_LAST));
+                LEGACY_FRAMES_LAST = LEGACY_FRAMES_NUM;
+                info(format!("Received EDGE FRAMES: {}", EDGE_FRAMES_NUM - EDGE_FRAMES_LAST));
+                EDGE_FRAMES_LAST = EDGE_FRAMES_NUM;
+            }
+            thread::sleep(Duration::from_millis(5000));
         }
     });
 
@@ -570,7 +587,9 @@ async fn forward(
 
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
-
+//         unsafe {
+//             LEGACY_FRAMES_NUM = LEGACY_FRAMES_NUM + 1;
+//         }
         //we create a new thread for each unique client
         let mut remove_existing = false;
         loop {
@@ -591,6 +610,7 @@ async fn forward(
                 let local_send_queue = main_sender.clone();
                 let (sender, receiver) = channel::<Vec<u8>>();
                 let remote_addr_copy = remote_addr.clone();
+
                 thread::spawn(move || {
                     let mut rng = rand::thread_rng();
 
@@ -618,7 +638,7 @@ async fn forward(
                             match upstream_recv.recv_from(&mut from_upstream) {
                                 Ok((bytes_rcvd, _)) => {
                                     let to_send = from_upstream[..bytes_rcvd].to_vec();
-                                    println!("Forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]);
+                                    debug(format!("Forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]));
 
                                     local_send_queue.send((src_addr, to_send))
                                         .expect("Failed to queue response from upstream server for forwarding!");
@@ -636,7 +656,7 @@ async fn forward(
                     loop {
                         match receiver.recv_timeout(Duration::from_millis(TIMEOUT)) {
                             Ok(from_client) => {
-                                println!("Forwarding packet from client {} to upstream server", PACKETNAMES[&from_client[3]]);
+                                debug(format!("Forwarding packet from client {} to upstream server", PACKETNAMES[&from_client[3]]));
                                 upstream_send.send_to(from_client.as_slice(), &remote_addr_copy)
                                     .expect(&format!("Failed to forward packet from client {} to upstream server!", src_addr));
                                 timeouts = 0; //reset timeout count
@@ -651,28 +671,26 @@ async fn forward(
                             }
                         };
                     }
+
                 });
+
                 sender
             });
 
             let to_send = buf[..num_bytes].to_vec();
 
+
             let mut will_send = true;
+
             match &to_send[3] {
                 // Scritto da Copilot: Match a single value to a single value to avoid a match on a slice of a single value and a single value slice. This is a bit of a hack, but it works. I'm sorry. I'm sorry. I'm sorry.
                 0 => {
                     // PUSH_DATA
                     let data_json: Rxpk = get_data_from_json(&to_send[12..]);
-                    debug(format!(
-                        "Evaluate if forwarding packet from client {:?} to upstream server",
-                        data_json.rxpk
-                    ));
+                    debug(format!( "Evaluate if forwarding packet from client {:?} to upstream server", data_json.rxpk ));
                     if data_json.rxpk.len() == 0 {
                         match fwinfo.forward_protocol {
-                            ForwardProtocols::UDP => {
-                                debug(format!(
-                                    "Forwarding Other data to {:x?}",
-                                    fwinfo.forward_host
+                            ForwardProtocols::UDP => { debug(format!( "Forwarding Other data to {:x?}", fwinfo.forward_host
                                 ));
                             } // _ => panic!("Forwarding protocol not implemented!"),
                         }
@@ -684,6 +702,7 @@ async fn forward(
                             debug(format!("Extracted GwMac {:x?}", gwmac));
 
                             let parsed_data = parse(data.clone());
+
                             match parsed_data {
                                 Ok(PhyPayload::Data(DataPayload::Encrypted(phy))) => {
                                     let fhdr = phy.fhdr();
@@ -700,6 +719,8 @@ async fn forward(
                                     let dev_addr = u32::from_be_bytes(extract_dev_addr_array(
                                         dev_addr_vec.into_iter().rev().collect(),
                                     ));
+
+                                    /*
                                     if mqtt_client.clone().is_some() {
                                         let json_to_send = build_json_for_broker(
                                             idx,
@@ -721,6 +742,7 @@ async fn forward(
                                             json_to_send,
                                         );
                                     };
+                                    */
                                     let is_active: bool;
                                     unsafe { is_active = E2L_CRYPTO.is_active }
                                     if is_active {
@@ -737,6 +759,7 @@ async fn forward(
                                                 && E2L_CRYPTO
                                                     .check_e2ed_enabled(dev_addr_string.clone());
                                         }
+
                                         if e2ed_enabled {
                                             unsafe {
                                                 let ret: Option<ProcessedFrameResult> = E2L_CRYPTO
@@ -747,6 +770,8 @@ async fn forward(
                                                     );
                                                 if ret.is_some() {
                                                     let processed_frame_result: ProcessedFrameResult = ret.unwrap();
+
+                                                    /*
                                                     // SEND LOG
                                                     let log_request: tonic::Request<GwLog> =
                                                         tonic::Request::new(GwLog {
@@ -761,6 +786,8 @@ async fn forward(
                                                             timetag: processed_frame_result.timetag,
                                                         });
                                                     rpc_client.gw_log(log_request).await?;
+                                                    */
+
                                                     // AGGREGATION RESULT
                                                     if processed_frame_result
                                                         .aggregation_option
@@ -785,9 +812,7 @@ async fn forward(
                                                             timetag: since_the_epoch.as_millis()
                                                                 as u64,
                                                         });
-                                                        let _response = rpc_client
-                                                            .new_data(edge_data_request)
-                                                            .await?;
+                                                        let _response = rpc_client.new_data(edge_data_request).await?;
                                                     }
                                                 } else {
                                                     // info(format!("Device not found or aggregation function not defined!"));
@@ -796,32 +821,35 @@ async fn forward(
                                             will_send = false;
                                         } else {
                                             match fwinfo.forward_protocol {
-                                                ForwardProtocols::UDP => {
-                                                    debug(format!(
-                                                        "Forwarding to {:x?}",
-                                                        fwinfo.forward_host
-                                                    ));
+                                                ForwardProtocols::UDP => {debug(format!("Forwarding to {:x?}",fwinfo.forward_host));
+
                                                     if f_port == DEFAULT_APP_PORT {
-                                                        info(format!(
-                                                            "Forwarding Legacy Frame to {}",
-                                                            dev_addr.clone()
-                                                        ));
+                                                        unsafe {
+                                                            LEGACY_FRAMES_NUM = LEGACY_FRAMES_NUM + 1;
+                                                        }
+                                                        debug(format!("Forwarding Legacy Frame to {}",dev_addr.clone()));
+
+/*
                                                         let log_request: tonic::Request<GwLog> =
                                                             tonic::Request::new(GwLog {
                                                                 gw_id: gw_rpc_endpoint_address
                                                                     .clone(),
                                                                 dev_addr: dev_addr_string.clone(),
-                                                                log: format!(
-                                                                    "Received Legacy Frame from {}",
-                                                                    dev_addr.clone()
-                                                                ),
+                                                                log: format!("Received Legacy Frame from {}", dev_addr.clone()),
                                                                 frame_type: LEGACY_FRAME_ID,
                                                                 fcnt: fcnt as u64,
                                                                 timetag: timetag.as_millis() as u64,
                                                             });
                                                         rpc_client.gw_log(log_request).await?;
+                                                            */
+
                                                     } else {
+
                                                         if f_port == DEFAULT_E2L_APP_PORT {
+                                                            unsafe {
+                                                                EDGE_FRAMES_NUM = EDGE_FRAMES_NUM + 1;
+                                                            }
+                                                            /*
                                                             // SEND LOG
                                                             let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
                                                             gw_id: gw_rpc_endpoint_address.clone(),
@@ -833,22 +861,24 @@ async fn forward(
                                                             frame_type: EDGE_FRAME_ID_NOT_PROCESSED,
                                                             fcnt: fcnt as u64,
                                                             timetag: timetag.as_millis() as u64,
-                                                        });
+                                                            });
                                                             rpc_client.gw_log(log_request).await?;
+                                                            */
                                                         }
                                                     }
+
                                                 } // _ => panic!("Forwarding protocol not implemented!"),
                                             }
                                         }
+
                                     } else {
-                                        debug(format!(
-                                        "Not forwarding packet from client {} to upstream server",
-                                        PACKETNAMES[&to_send[3]]
-                                    ));
+                                        debug(format!("Not forwarding packet from client {} to upstream server", PACKETNAMES[&to_send[3]]));
                                         will_send = false;
                                         break;
                                     }
+
                                 }
+                                /*
                                 Ok(PhyPayload::JoinRequest(phy)) => {
                                     let dev_eui_vec = phy.dev_eui().as_ref().to_vec();
                                     let dev_eui = u64::from_be_bytes(extract_dev_eui_array(
@@ -901,7 +931,9 @@ async fn forward(
                                         break;
                                     }
                                 }
-                                Ok(_) => {}
+                                */
+                                Ok(_) => {
+                                }
                                 Err(_) => {
                                     debug(format!("Not forwarding packet from client {} to upstream server, Unknown Packet with size {}, data: {:x?}", PACKETNAMES[&to_send[3]], data.len(), data));
                                     will_send = false;
@@ -919,13 +951,14 @@ async fn forward(
                 }
                 _ => (),
             }
+
             if will_send {
                 match sender.send(to_send.to_vec().clone()) {
                     Ok(_) => {
-                        println!(
+                        debug(format!(
                             "Forwarding {} ({}) to upstream server",
                             PACKETNAMES[&to_send[3]], &to_send[3]
-                        );
+                        ));
 
                         break;
                     }
@@ -937,10 +970,7 @@ async fn forward(
                             );
                         }
                         //client previously timed out
-                        debug(format!(
-                            "New connection received from previously timed-out client {}",
-                            client_id
-                        ));
+                        debug(format!("New connection received from previously timed-out client {}",client_id));
                         remove_existing = true;
                         continue;
                     }
