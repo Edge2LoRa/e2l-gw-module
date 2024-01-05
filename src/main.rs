@@ -36,7 +36,6 @@ use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::E2gwPubInfo;
 
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::edge2_gateway_server::Edge2GatewayServer;
 use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
-use e2l_crypto::e2l_crypto::e2l_crypto::AggregationResult;
 use tonic::transport::Server;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
@@ -810,6 +809,11 @@ async fn forward(
                                                             });
                                                         rpc_client.gw_log(log_request).await?;
                                                     }
+                                                    EDGE_FRAMES_NUM = EDGE_FRAMES_NUM + 1;
+                                                    EDGE_FRAMES_FCNTS.push(FcntStruct {
+                                                        dev_addr: dev_addr_string.clone(),
+                                                        fcnt: fcnt as u64,
+                                                    });
 
                                                     // AGGREGATION RESULT
                                                     if processed_frame_result
@@ -875,6 +879,14 @@ async fn forward(
                                                             });
                                                             rpc_client.gw_log(log_request).await?;
                                                         }
+                                                        unsafe {
+                                                            LEGACY_FRAMES_NUM =
+                                                                LEGACY_FRAMES_NUM + 1;
+                                                            LEGACY_FRAMES_FCNTS.push(FcntStruct {
+                                                                dev_addr: dev_addr_string.clone(),
+                                                                fcnt: fcnt as u64,
+                                                            });
+                                                        }
                                                     } else {
                                                         if f_port == DEFAULT_E2L_APP_PORT {
                                                             unsafe {
@@ -897,6 +909,17 @@ async fn forward(
                                                                 rpc_client
                                                                     .gw_log(log_request)
                                                                     .await?;
+                                                            }
+                                                            unsafe {
+                                                                EDGE_NOT_PROCESSED_FRAMES_NUM =
+                                                                    EDGE_NOT_PROCESSED_FRAMES_NUM
+                                                                        + 1;
+                                                                EDGE_NOT_PROCESSED_FRAMES_FCNTS
+                                                                    .push(FcntStruct {
+                                                                        dev_addr: dev_addr_string
+                                                                            .clone(),
+                                                                        fcnt: fcnt as u64,
+                                                                    });
                                                             }
                                                         }
                                                     }
