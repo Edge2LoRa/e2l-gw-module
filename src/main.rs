@@ -610,6 +610,13 @@ async fn forward(
                     edge_not_processed_frames: edge_not_processed_delta,
                     edge_not_processed_fcnts: edge_not_processed_fcnts,
                 });
+
+                info(format!("Received Legacy Frame: {}", legacy_delta));
+                info(format!("Received Edge Frame: {}", edge_delta));
+                info(format!(
+                    "Received Edge Frame not processed: {}",
+                    edge_not_processed_delta
+                ));
             }
             let response_frames = rpc_client_frames.gw_frames_stats(gw_frame_stats_request);
             rt_frames_counter
@@ -625,9 +632,6 @@ async fn forward(
     info(format!("Starting Listening for incoming LoRaWAN packets!"));
     loop {
         let (num_bytes, src_addr) = local.recv_from(&mut buf).expect("Didn't receive data");
-        //         unsafe {
-        //             LEGACY_FRAMES_NUM = LEGACY_FRAMES_NUM + 1;
-        //         }
         //we create a new thread for each unique client
         let mut remove_existing = false;
         loop {
@@ -857,10 +861,6 @@ async fn forward(
                                                     ));
 
                                                     if f_port == DEFAULT_APP_PORT {
-                                                        unsafe {
-                                                            LEGACY_FRAMES_NUM =
-                                                                LEGACY_FRAMES_NUM + 1;
-                                                        }
                                                         debug(format!(
                                                             "Forwarding Legacy Frame to {}",
                                                             dev_addr.clone()
@@ -889,10 +889,6 @@ async fn forward(
                                                         }
                                                     } else {
                                                         if f_port == DEFAULT_E2L_APP_PORT {
-                                                            unsafe {
-                                                                EDGE_FRAMES_NUM =
-                                                                    EDGE_FRAMES_NUM + 1;
-                                                            }
                                                             // SEND LOG
                                                             if !ignore_logs_flag {
                                                                 let log_request: tonic::Request<GwLog> = tonic::Request::new(GwLog {
