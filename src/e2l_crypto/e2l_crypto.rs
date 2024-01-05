@@ -265,7 +265,6 @@ pub(crate) mod e2l_crypto {
         pub fn check_e2ed_enabled(&self, dev_addr: String) -> bool {
             for dev_info in self.active_directory.iter() {
                 if dev_info.dev_addr == dev_addr {
-                    println!("Device is in the active directory");
                     return true;
                 }
             }
@@ -354,8 +353,8 @@ pub(crate) mod e2l_crypto {
                                         return None;
                                     }
                                 }
-                                println!("\n\nValues: {:?}", dev_info.values);
-                                println!("Aggregation result: {:?}\n\n", aggregation_result);
+                                // println!("\n\nValues: {:?}", dev_info.values);
+                                // println!("Aggregation result: {:?}\n\n", aggregation_result);
                                 let fncts: Vec<u64> = dev_info.fcnts.clone();
                                 dev_info.values = Vec::new();
                                 dev_info.fcnts = Vec::new();
