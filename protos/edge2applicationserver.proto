@@ -11,6 +11,8 @@ service Edge2ApplicationServer {
 
   rpc sys_log (SysLog) returns (ResponseMessage);
 
+  rpc gw_frames_stats (GwFrameStats) returns (ResponseMessage);
+
 } 
 
 message ResponseMessage {
@@ -49,4 +51,19 @@ message SysLog {
   float cpu_usage = 4;
   uint64 data_received = 5;
   uint64 data_transmitted = 6;
+}
+
+message GwFrameStats {
+  string gw_id = 1;
+  uint64 legacy_frames = 2;
+  repeated FcntStruct legacy_fcnts = 3;
+  uint64 edge_frames = 4;
+  repeated FcntStruct edge_fcnts = 5;
+  uint64 edge_not_processed_frames = 6;
+  repeated FcntStruct edge_not_processed_fcnts = 7;
+}
+
+message FcntStruct {
+  string dev_addr = 3;
+  uint64 fcnt = 2;
 }
