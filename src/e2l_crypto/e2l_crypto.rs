@@ -6,6 +6,7 @@ static MAX_ID: u8 = 4;
 pub(crate) mod e2l_crypto {
     // Crypto
     extern crate p256;
+    extern crate serde_json;
 
     use std::ops::Mul;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +34,12 @@ pub(crate) mod e2l_crypto {
         pub dev_eui: String,
         pub dev_addr: String,
         pub aggregated_data: i64,
+        pub fcnts: Vec<u64>,
+    }
+
+    pub struct ProcessedFrameResult {
+        pub timetag: u64,
+        pub aggregation_option: Option<AggregationResult>,
     }
 
     pub struct DevInfo {
@@ -42,6 +49,7 @@ pub(crate) mod e2l_crypto {
         edge_s_enc_key: AES128,
         edge_s_int_key: AES128,
         values: Vec<i64>,
+        fcnts: Vec<u64>,
     }
 
     #[derive(Default)]
@@ -52,9 +60,70 @@ pub(crate) mod e2l_crypto {
         pub active_directory: Vec<DevInfo>,
         pub aggregation_function: u8,
         pub window_size: usize,
+        pub is_active: bool,
     }
 
     impl E2LCrypto {
+        pub fn set_active(&mut self, is_active: bool) {
+            self.is_active = is_active;
+        }
+
+        pub fn _load_device_from_file(&mut self, path: String) {
+            if path.is_empty() {
+                return;
+            }
+            let json_file = std::fs::read_to_string(&path);
+            match json_file {
+                Ok(json_to_string) => {
+                    let devices_list: serde_json::Value =
+                        serde_json::from_str(&json_to_string).unwrap();
+                    for device in devices_list.as_array().unwrap() {
+                        let dev_eui: &str = device["ids"]["dev_eui"].as_str().unwrap();
+                        let dev_addr: &str = device["session"]["dev_addr"].as_str().unwrap();
+                        // let device_keys: serde_json::Value = device["session"]["keys"];
+
+                        // Get session keys
+                        let edge_s_enc_key_str = device["session"]["keys"]["app_s_key"]["key"]
+                            .as_str()
+                            .unwrap();
+                        let mut edge_s_enc_key_bytes: [u8; 16] = [0; 16];
+                        hex::decode_to_slice(edge_s_enc_key_str, &mut edge_s_enc_key_bytes)
+                            .expect("Decoding failed");
+                        let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes.clone());
+                        let edge_s_int_key_str = device["session"]["keys"]["f_nwk_s_int_key"]
+                            ["key"]
+                            .as_str()
+                            .unwrap();
+                        let mut edge_s_int_key_bytes: [u8; 16] = [0; 16];
+                        hex::decode_to_slice(edge_s_int_key_str, &mut edge_s_int_key_bytes)
+                            .expect("Decoding failed");
+                        let edge_s_int_key = AES128::from(edge_s_int_key_bytes.clone());
+
+                        // Create fake priv pub device key
+                        let dev_fake_private_key = Some(P256SecretKey::random(&mut OsRng));
+                        let dev_fake_public_key =
+                            Some(dev_fake_private_key.clone().unwrap().public_key()).unwrap();
+
+                        // Create DevInfo struct and add to active directory
+                        let new_dev_info: DevInfo = DevInfo {
+                            dev_eui: dev_eui.to_string(),
+                            dev_addr: dev_addr.to_string(),
+                            dev_public_key: dev_fake_public_key,
+                            edge_s_enc_key: edge_s_enc_key,
+                            edge_s_int_key: edge_s_int_key,
+                            values: Vec::new(),
+                            fcnts: Vec::new(),
+                        };
+                        self.active_directory.push(new_dev_info);
+                    }
+                    println!("Devices loaded from file");
+                }
+                Err(err) => {
+                    println!("{:?}", err);
+                    return;
+                }
+            }
+        }
         /*
            @brief: This function multiplies a scalar with a point on the curve
            @param scalar: the scalar to multiply as private key
@@ -146,7 +215,6 @@ pub(crate) mod e2l_crypto {
             let edge_s_int_key_bytes: [u8; 16] =
                 edge_s_int_key_hash_result[0..16].try_into().unwrap();
             let edge_s_int_key = AES128::from(edge_s_int_key_bytes);
-            println!("\nEdgeSIntKey: {:?}\n", edge_s_int_key);
 
             // Compute Edge Session Encryption Key
             let mut edge_s_key_enc_bytes_before_hash = edge_s_key_bytes.clone();
@@ -155,7 +223,6 @@ pub(crate) mod e2l_crypto {
             let edge_s_enc_key_bytes: [u8; 16] =
                 edge_s_enc_key_hash_result[0..16].try_into().unwrap();
             let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes);
-            println!("\nEdgeSEncKey: {:?}\n", edge_s_enc_key);
 
             // Add Info to dev info struct
             let mut dev_info_found = false;
@@ -178,6 +245,7 @@ pub(crate) mod e2l_crypto {
                     edge_s_enc_key: edge_s_enc_key,
                     edge_s_int_key: edge_s_int_key,
                     values: Vec::new(),
+                    fcnts: Vec::new(),
                 };
                 self.active_directory.push(new_dev_info);
             }
@@ -197,7 +265,6 @@ pub(crate) mod e2l_crypto {
         pub fn check_e2ed_enabled(&self, dev_addr: String) -> bool {
             for dev_info in self.active_directory.iter() {
                 if dev_info.dev_addr == dev_addr {
-                    println!("Device is in the active directory");
                     return true;
                 }
             }
@@ -217,27 +284,30 @@ pub(crate) mod e2l_crypto {
             dev_addr: String,
             fcnt: u16,
             phy: EncryptedDataPayload<Vec<u8>, DefaultFactory>,
-        ) -> Option<AggregationResult> {
+        ) -> Option<ProcessedFrameResult> {
             let dev_info: &mut DevInfo;
-            let mut dev_info_found = false;
             for dev_info_iter in self.active_directory.iter_mut() {
                 if dev_info_iter.dev_addr == dev_addr {
                     dev_info = dev_info_iter;
-                    dev_info_found = true;
+                    // dev_info_found = true;
                     // GET KEYS
                     let edge_s_enc_key: AES128 = dev_info.edge_s_enc_key.clone();
-                    // let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
+                    let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
                     let decrypted_data_payload = phy
-                        .decrypt(Some(&edge_s_enc_key), Some(&edge_s_enc_key), fcnt.into())
+                        .decrypt(Some(&edge_s_int_key), Some(&edge_s_enc_key), fcnt.into())
                         .unwrap();
 
                     let frame_payload_result = decrypted_data_payload.frm_payload().unwrap();
                     match frame_payload_result {
                         lorawan_encoding::parser::FRMPayload::Data(frame_payload) => {
                             let frame_payload_vec: Vec<u8> = frame_payload.to_vec();
-                            let sensor_value: i64 = frame_payload_vec[0].into();
-                            println!("Edge Frame Payload: {:?}\n", sensor_value);
+                            let frame_payload_str = String::from_utf8(frame_payload_vec.clone())
+                                .expect("Failed to Decode Frame Payload");
+                            let timetag: u64 = frame_payload_str.parse().unwrap();
+                            let last_index = frame_payload_vec.len() - 1;
+                            let sensor_value: i64 = frame_payload_vec[last_index].into();
                             dev_info.values.push(sensor_value);
+                            dev_info.fcnts.push(fcnt as u64);
                             if dev_info.values.len() >= self.window_size {
                                 let aggregation_result: i64;
                                 let mut status_code: i64 = 0;
@@ -283,15 +353,28 @@ pub(crate) mod e2l_crypto {
                                         return None;
                                     }
                                 }
-                                println!("\n\nValues: {:?}", dev_info.values);
-                                println!("Aggregation result: {:?}\n\n", aggregation_result);
+                                // println!("\n\nValues: {:?}", dev_info.values);
+                                // println!("Aggregation result: {:?}\n\n", aggregation_result);
+                                let fncts: Vec<u64> = dev_info.fcnts.clone();
                                 dev_info.values = Vec::new();
-
-                                return Some(AggregationResult {
+                                dev_info.fcnts = Vec::new();
+                                let aggregation_result = AggregationResult {
                                     status_code: status_code,
                                     dev_eui: dev_info.dev_eui.clone(),
                                     dev_addr: dev_info.dev_addr.clone(),
                                     aggregated_data: aggregation_result,
+                                    fcnts: fncts,
+                                };
+                                let return_value: ProcessedFrameResult = ProcessedFrameResult {
+                                    timetag: timetag,
+                                    aggregation_option: Some(aggregation_result),
+                                };
+
+                                return Some(return_value);
+                            } else {
+                                return Some(ProcessedFrameResult {
+                                    timetag: timetag,
+                                    aggregation_option: None,
                                 });
                             }
                         }
@@ -300,13 +383,8 @@ pub(crate) mod e2l_crypto {
                             return None;
                         }
                     };
-                    break;
                 }
             }
-            if !dev_info_found {
-                return None;
-            }
-
             return None;
         }
 
@@ -429,6 +507,45 @@ pub(crate) mod e2l_crypto {
             };
             return response;
         }
+
+        pub fn add_devices(
+            &mut self,
+            device_list: Vec<crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::Device>,
+        ) -> crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::GwResponse {
+            for device in device_list {
+                // Create fake priv pub device key
+                let dev_fake_private_key = Some(P256SecretKey::random(&mut OsRng));
+                let dev_fake_public_key =
+                    Some(dev_fake_private_key.clone().unwrap().public_key()).unwrap();
+                let dev_eui = device.dev_eui;
+                let dev_addr = device.dev_addr;
+                let edge_s_enc_key_vec = device.edge_s_enc_key;
+                let edge_s_enc_key_bytes: [u8; 16] = edge_s_enc_key_vec.try_into().unwrap();
+                let edge_s_enc_key = AES128::from(edge_s_enc_key_bytes.clone());
+
+                let edge_s_int_key_vec = device.edge_s_int_key;
+                let edge_s_int_key_bytes: [u8; 16] = edge_s_int_key_vec.try_into().unwrap();
+                let edge_s_int_key = AES128::from(edge_s_int_key_bytes.clone());
+
+                // Create DevInfo struct and add to active directory
+                let new_dev_info: DevInfo = DevInfo {
+                    dev_eui: dev_eui,
+                    dev_addr: dev_addr,
+                    dev_public_key: dev_fake_public_key,
+                    edge_s_enc_key: edge_s_enc_key,
+                    edge_s_int_key: edge_s_int_key,
+                    values: Vec::new(),
+                    fcnts: Vec::new(),
+                };
+                self.active_directory.push(new_dev_info);
+            }
+
+            let response = crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::GwResponse {
+                status_code: 0,
+                message: "Devices added".to_string(),
+            };
+            return response;
+        }
     }
 }
 
@@ -439,4 +556,5 @@ pub static mut E2L_CRYPTO: E2LCrypto = E2LCrypto {
     active_directory: Vec::new(),
     aggregation_function: AVG_ID,
     window_size: 5,
+    is_active: true,
 };

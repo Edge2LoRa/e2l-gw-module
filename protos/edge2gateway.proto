@@ -6,6 +6,12 @@ service Edge2Gateway {
     rpc handle_ed_pub_info (EdPubInfo) returns (GwInfo);
     rpc update_aggregation_params (AggregationParams) returns (GwResponse);
     rpc remove_e2device (E2LDeviceInfo) returns (E2LData);
+    rpc add_devices (E2LDevicesInfoComplete) returns (GwResponse);
+    rpc set_active (ActiveFlag) returns (GwResponse);
+}
+
+message ActiveFlag {
+    bool is_active = 1;
 }
 
 message EdPubInfo {
@@ -33,6 +39,17 @@ message GwResponse {
 message E2LDeviceInfo {
     string dev_eui = 1;
     string dev_addr = 2;
+}
+
+message Device{
+    string dev_eui = 1;
+    string dev_addr = 2;
+    bytes edge_s_enc_key = 3;
+    bytes edge_s_int_key = 4;
+}
+
+message E2LDevicesInfoComplete {
+    repeated Device device_list = 1;
 }
 
 message E2LData {
