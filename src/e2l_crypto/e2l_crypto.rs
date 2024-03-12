@@ -1,8 +1,5 @@
 use self::e2l_crypto::E2LCrypto;
 static AVG_ID: u8 = 1;
-static SUM_ID: u8 = 2;
-static MIN_ID: u8 = 3;
-static MAX_ID: u8 = 4;
 pub(crate) mod e2l_crypto {
     // Crypto
     extern crate p256;
