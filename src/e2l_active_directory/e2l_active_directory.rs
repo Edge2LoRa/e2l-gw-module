@@ -23,6 +23,12 @@ pub(crate) mod e2l_active_directory {
         associated_dev_info: HashMap<String, AssociatedDevInfo>,
     }
 
+    impl Default for E2LActiveDirectory {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl E2LActiveDirectory {
         pub fn new() -> Self {
             E2LActiveDirectory {
