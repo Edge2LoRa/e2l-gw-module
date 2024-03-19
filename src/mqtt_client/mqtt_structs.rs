@@ -1,8 +1,8 @@
 pub(crate) mod mqtt_structs {
-    use std::time::SystemTime;
     use rand::Rng;
-    use serde_derive::Serialize;
     use serde_derive::Deserialize;
+    use serde_derive::Serialize;
+    use std::time::SystemTime;
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct MqttVariables {
@@ -11,29 +11,27 @@ pub(crate) mod mqtt_structs {
         pub broker_auth_name: String,
         pub broker_auth_password: String,
         pub broker_topic: String,
-
-
+        pub broker_qos: i32,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct MqttJson {
-        pub index : u64,
-        pub gwmac : String,
-        pub deveui : String,
-        pub devaddr : String,
-        pub fcnt : u32,
-        pub ftype : String,
-        pub rssi : i32,
-        pub lsnr : f32,
-        pub size : u32,
+        pub index: u64,
+        pub gwmac: String,
+        pub deveui: String,
+        pub devaddr: String,
+        pub fcnt: u32,
+        pub ftype: String,
+        pub rssi: i32,
+        pub lsnr: f32,
+        pub size: u32,
         pub chan: u32,
-        pub freq : f32,
-        pub datr : String,
-        pub tmst : u64,
-        pub time : String,
+        pub freq: f32,
+        pub datr: String,
+        pub tmst: u64,
+        pub time: String,
         pub agent_time: u64,
-        pub end_line : u64
-
+        pub end_line: u64,
     }
     impl Default for MqttJson {
         fn default() -> Self {
@@ -52,8 +50,12 @@ pub(crate) mod mqtt_structs {
                 datr: "Missing".to_string(),
                 tmst: 0,
                 time: "2000-01-01T00:00:00.000000Z".to_string(),
-                agent_time: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() * 1000,
-                end_line: 4753416825896106269
+                agent_time: SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    * 1000,
+                end_line: 4753416825896106269,
             }
         }
     }

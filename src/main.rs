@@ -24,10 +24,11 @@ extern crate p256;
 
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::FcntStruct;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::GwFrameStats;
-use e2l_crypto::e2l_crypto::e2l_crypto::ProcessedFrameResult;
+// use e2l_crypto::e2l_crypto::e2l_crypto::ProcessedFrameResult;
+use mqtt_client::mqtt_structs::mqtt_structs::MqttVariables;
 use sysinfo::{CpuExt, System, SystemExt};
 
-use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
+// use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::GwLog;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::SysLog;
 // E2L
@@ -39,16 +40,13 @@ use e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::MyEdge2GatewayServer;
 use tonic::transport::Server;
 
 use json_structs::filters_json_structs::filter_json::{EnvVariables, FilterJson};
-use lorawan_encoding::parser::{
-    parse, AsPhyPayloadBytes, DataHeader, DataPayload, MHDRAble, MType, PhyPayload,
-};
-use lorawan_structs::lorawan_structs::lora_structs::{Rxpk, RxpkContent};
+use lorawan_encoding::parser::{parse, AsPhyPayloadBytes, DataHeader, DataPayload, PhyPayload};
+use lorawan_structs::lorawan_structs::lora_structs::Rxpk;
 use lorawan_structs::lorawan_structs::{ForwardInfo, ForwardProtocols};
-use mqtt_client::mqtt_structs::mqtt_structs::{MqttJson, MqttVariables};
 use rand::Rng;
-use rumqttc::{Client, MqttOptions, QoS};
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::fmt::format;
 use std::fmt::Display;
 use std::fmt::{self};
 // use std::io::Read;
@@ -65,6 +63,8 @@ const TIMEOUT: u64 = 3 * 60 * 100;
 static mut DEBUG: bool = false;
 
 // E2L modules
+use paho_mqtt as mqtt;
+
 use e2l_crypto::e2l_crypto::E2L_CRYPTO;
 static EDGE_FRAME_ID: u64 = 1;
 static LEGACY_FRAME_ID: u64 = 2;
@@ -148,74 +148,6 @@ fn get_data_from_json(from_upstream: &[u8]) -> Rxpk {
     data
 }
 
-fn build_json_for_broker(
-    idx: u64,
-    gw_mac: String,
-    data: &RxpkContent,
-    fcnt: Option<u16>,
-    mtype: MType,
-    dev_addr: Option<u32>,
-    dev_eui: Option<u64>,
-) -> String {
-    let mut mqtt_json = MqttJson::from(data);
-    mqtt_json.index = idx;
-    if dev_addr.is_some() {
-        mqtt_json.devaddr = Some(format!("{:x}", dev_addr.unwrap()).to_string()).unwrap();
-    }
-    if dev_eui.is_some() {
-        mqtt_json.deveui = Some(format!("{:x}", dev_eui.unwrap()).to_string()).unwrap();
-    }
-    mqtt_json.gwmac = gw_mac;
-    if fcnt.is_some() {
-        mqtt_json.fcnt = fcnt.unwrap() as u32;
-    }
-    if data.time.is_some() {
-        mqtt_json.time = data.time.clone().unwrap();
-    }
-
-    mqtt_json.ftype = format!("{:?}", mtype);
-    mqtt_json.size = data.size;
-    mqtt_json.end_line = 1;
-    let json_to_send = serde_json::to_string_pretty(&mqtt_json).unwrap();
-
-    return json_to_send;
-}
-
-impl From<&RxpkContent> for MqttJson {
-    fn from(m: &RxpkContent) -> Self {
-        let rssi_clone: i32;
-        if m.rssi.is_some() {
-            rssi_clone = m.rssi.unwrap();
-        } else {
-            rssi_clone = 0;
-        }
-
-        let lsnr_clone: f32;
-        if m.lsnr.is_some() {
-            lsnr_clone = m.lsnr.unwrap();
-        } else {
-            lsnr_clone = 0.0;
-        }
-
-        let chan_clone: u32;
-        if m.chan.is_some() {
-            chan_clone = m.chan.unwrap();
-        } else {
-            chan_clone = 0;
-        }
-
-        Self {
-            rssi: rssi_clone,
-            lsnr: lsnr_clone,
-            chan: chan_clone,
-            freq: m.freq,
-            datr: m.datr.clone(),
-            tmst: m.tmst as u64 * 1000,
-            ..Default::default()
-        }
-    }
-}
-
 fn read_json_from_file(mut path: String) -> FilterJson {
     if path.is_empty() {
         path = "src/filters.json".to_string();
@@ -236,11 +168,6 @@ fn charge_environment_variables() -> EnvVariables {
         } else {
             dotenv::var("DEBUG").unwrap().parse().unwrap()
         },
-        mqtt: if dotenv::var("MQTT").unwrap().is_empty() {
-            false
-        } else {
-            dotenv::var("MQTT").unwrap().parse().unwrap()
-        },
     }
 }
 
@@ -251,34 +178,40 @@ fn charge_mqtt_variables() -> MqttVariables {
         broker_auth_name: dotenv::var("BROKER_AUTH_USERNAME").unwrap(),
         broker_auth_password: dotenv::var("BROKER_AUTH_PASSWORD").unwrap(),
         broker_topic: dotenv::var("BROKER_TOPIC").unwrap(),
+        broker_qos: dotenv::var("BROKER_QOS").unwrap().parse::<i32>().unwrap(),
     }
-}
-
-fn initialize_mqtt(url: &String, port: u16, topic: &String) -> Client {
-    let mqtt_options = MqttOptions::new("elegant_client", url, port);
-    let (mut mqtt_client, mut connection) = Client::new(mqtt_options, 10);
-    mqtt_client.subscribe(topic, QoS::AtLeastOnce).unwrap();
-    thread::spawn(move || {
-        for notification in connection.iter().enumerate() {
-            println!("{:?}", notification);
-        }
-    });
-    return mqtt_client;
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     let env_variables = charge_environment_variables();
+
+    // INIT MQTT CLIENT
+    info(format!("Init MQTT client & connect to broker..."));
     let mqtt_variables = charge_mqtt_variables();
-    let mut mqtt_client: Option<Client> = None;
-    if env_variables.mqtt == true {
-        mqtt_client = Some(initialize_mqtt(
-            &mqtt_variables.broker_url,
-            mqtt_variables.broker_port.parse().unwrap(),
-            &mqtt_variables.broker_topic,
-        ));
+    let mqtt_client: mqtt::AsyncClient = mqtt::AsyncClient::new(format!(
+        "{}:{}",
+        mqtt_variables.broker_url.clone(),
+        mqtt_variables.broker_port.clone()
+    ))
+    .unwrap_or_else(|err| {
+        println!("Error creating the client: {:?}", err);
+        std::process::exit(1);
+    });
+    let mut mqtt_conn_opts_builder = mqtt::ConnectOptionsBuilder::new();
+    mqtt_conn_opts_builder.user_name(mqtt_variables.broker_auth_name.clone());
+    mqtt_conn_opts_builder.password(mqtt_variables.broker_auth_password.clone());
+    // Connect and wait for it to complete or fail
+    if let Err(e) = mqtt_client
+        .connect(mqtt_conn_opts_builder.finalize())
+        .wait()
+    {
+        println!("Unable to connect: {:?}", e);
+        std::process::exit(1);
     }
+    info(format!("MQTT INIT AND CONNECT COMPLETED!"));
+
     let path = env_variables.filters;
     let filters: FilterJson = read_json_from_file((path).to_string());
 
@@ -380,7 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         remote_port,
         fwinfo,
         mqtt_client,
-        mqtt_variables.broker_topic,
+        mqtt_variables,
     )
     .await?;
     Ok(())
@@ -426,23 +359,14 @@ fn check_range<T: Display + PartialEq + PartialOrd>(
     return check;
 }
 
-fn send_to_broker(mqtt_client: Option<Client>, topic: String, json: String) {
-    thread::spawn(move || {
-        mqtt_client
-            .unwrap()
-            .publish(topic, QoS::AtLeastOnce, false, json.as_bytes())
-            .unwrap();
-    });
-}
-
 async fn forward(
     bind_addr: &str,
     local_port: i32,
     remote_host: &str,
     remote_port: u16,
     fwinfo: ForwardInfo<'_>,
-    mqtt_client: Option<Client>,
-    topic: String,
+    mqtt_client: mqtt::AsyncClient,
+    mqtt_variables: MqttVariables,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // GET IGNORE LOG FLAG
     let ignore_logs_str_flag = dotenv::var("IGNORE_LOGS").unwrap();
@@ -460,6 +384,12 @@ async fn forward(
     let gw_rpc_endpoint_port = dotenv::var("GW_RPC_ENDPOINT_PORT").unwrap();
     let rpc_endpoint = format!("0.0.0.0:{}", gw_rpc_endpoint_port.clone());
 
+    // CREATE MQTT TOPIC
+    let mqtt_process_topic = mqtt::Topic::new(
+        &mqtt_client,
+        mqtt_variables.broker_topic,
+        mqtt_variables.broker_qos,
+    );
     // INIT RPC SERVER
     let rpc_server = MyEdge2GatewayServer {};
     let rt = tokio::runtime::Runtime::new().expect("Failed to obtain a new RunTime object");
@@ -471,12 +401,6 @@ async fn forward(
         rt.block_on(server_future)
             .expect("RPC Server failed to start");
     });
-
-    // Load device info from file
-    // let device_list_filename = dotenv::var("DEVICE_LIST_FILENAME").unwrap();
-    // unsafe {
-    //     E2L_CRYPTO.load_device_from_file(device_list_filename);
-    // }
 
     // Compute private ECC key
     let compressed_public_key = unsafe { E2L_CRYPTO.generate_ecc_keys() };
@@ -499,7 +423,6 @@ async fn forward(
 
     let local_addr = format!("{}:{}", bind_addr, local_port);
     let local = UdpSocket::bind(&local_addr).expect(&format!("Unable to bind to {}", &local_addr));
-    let mut idx: u64 = 0;
 
     info(format!("Listening on {}", local.local_addr().unwrap()));
     info(format!("Forwarding to {}:{}", remote_host, remote_port));
@@ -785,72 +708,75 @@ async fn forward(
                                         }
 
                                         if e2ed_enabled {
-                                            unsafe {
-                                                let ret: Option<ProcessedFrameResult> = E2L_CRYPTO
-                                                    .process_frame(
-                                                        dev_addr_string.clone(),
-                                                        fcnt,
-                                                        phy,
-                                                    );
-                                                if ret.is_some() {
-                                                    let processed_frame_result: ProcessedFrameResult = ret.unwrap();
+                                            let _tok: mqtt::DeliveryToken =
+                                                mqtt_process_topic.publish("Hello, World!");
 
-                                                    // SEND LOG
-                                                    if !ignore_logs_flag {
-                                                        let log_request: tonic::Request<GwLog> =
-                                                            tonic::Request::new(GwLog {
-                                                                gw_id: gw_rpc_endpoint_address
-                                                                    .clone(),
-                                                                dev_addr: dev_addr_string.clone(),
-                                                                log: format!(
-                                                                    "Processed Edge Frame from {}",
-                                                                    dev_addr.clone()
-                                                                ),
-                                                                frame_type: EDGE_FRAME_ID,
-                                                                fcnt: fcnt as u64,
-                                                                timetag: processed_frame_result
-                                                                    .timetag,
-                                                            });
-                                                        rpc_client.gw_log(log_request).await?;
-                                                    }
-                                                    EDGE_FRAMES_NUM = EDGE_FRAMES_NUM + 1;
-                                                    EDGE_FRAMES_FCNTS.push(FcntStruct {
-                                                        dev_addr: dev_addr_string.clone(),
-                                                        fcnt: fcnt as u64,
-                                                    });
+                                            // unsafe {
+                                            // let ret: Option<ProcessedFrameResult> = E2L_CRYPTO
+                                            //     .process_frame(
+                                            //         dev_addr_string.clone(),
+                                            //         fcnt,
+                                            //         phy,
+                                            //     );
+                                            // if ret.is_some() {
+                                            //     let processed_frame_result: ProcessedFrameResult = ret.unwrap();
 
-                                                    // AGGREGATION RESULT
-                                                    if processed_frame_result
-                                                        .aggregation_option
-                                                        .is_some()
-                                                    {
-                                                        let ret = processed_frame_result
-                                                            .aggregation_option
-                                                            .unwrap();
-                                                        // get epoch time
-                                                        let start = SystemTime::now();
-                                                        let since_the_epoch = start
-                                                            .duration_since(UNIX_EPOCH)
-                                                            .expect("Time went backwards");
-                                                        let edge_data_request: tonic::Request<
-                                                            EdgeData,
-                                                        > = tonic::Request::new(EdgeData {
-                                                            gw_id: gw_rpc_endpoint_address.clone(),
-                                                            dev_eui: ret.dev_eui,
-                                                            dev_addr: ret.dev_addr,
-                                                            aggregated_data: ret.aggregated_data,
-                                                            fcnts: ret.fcnts as Vec<u64>,
-                                                            timetag: since_the_epoch.as_millis()
-                                                                as u64,
-                                                        });
-                                                        let _response = rpc_client
-                                                            .new_data(edge_data_request)
-                                                            .await?;
-                                                    }
-                                                } else {
-                                                    debug(format!("Device not found or aggregation function not defined!"));
-                                                }
-                                            }
+                                            //     // SEND LOG
+                                            //     if !ignore_logs_flag {
+                                            //         let log_request: tonic::Request<GwLog> =
+                                            //             tonic::Request::new(GwLog {
+                                            //                 gw_id: gw_rpc_endpoint_address
+                                            //                     .clone(),
+                                            //                 dev_addr: dev_addr_string.clone(),
+                                            //                 log: format!(
+                                            //                     "Processed Edge Frame from {}",
+                                            //                     dev_addr.clone()
+                                            //                 ),
+                                            //                 frame_type: EDGE_FRAME_ID,
+                                            //                 fcnt: fcnt as u64,
+                                            //                 timetag: processed_frame_result
+                                            //                     .timetag,
+                                            //             });
+                                            //         rpc_client.gw_log(log_request).await?;
+                                            //     }
+                                            //     EDGE_FRAMES_NUM = EDGE_FRAMES_NUM + 1;
+                                            //     EDGE_FRAMES_FCNTS.push(FcntStruct {
+                                            //         dev_addr: dev_addr_string.clone(),
+                                            //         fcnt: fcnt as u64,
+                                            //     });
+
+                                            //     // AGGREGATION RESULT
+                                            //     if processed_frame_result
+                                            //         .aggregation_option
+                                            //         .is_some()
+                                            //     {
+                                            //         let ret = processed_frame_result
+                                            //             .aggregation_option
+                                            //             .unwrap();
+                                            //         // get epoch time
+                                            //         let start = SystemTime::now();
+                                            //         let since_the_epoch = start
+                                            //             .duration_since(UNIX_EPOCH)
+                                            //             .expect("Time went backwards");
+                                            //         let edge_data_request: tonic::Request<
+                                            //             EdgeData,
+                                            //         > = tonic::Request::new(EdgeData {
+                                            //             gw_id: gw_rpc_endpoint_address.clone(),
+                                            //             dev_eui: ret.dev_eui,
+                                            //             dev_addr: ret.dev_addr,
+                                            //             aggregated_data: ret.aggregated_data,
+                                            //             fcnts: ret.fcnts as Vec<u64>,
+                                            //             timetag: since_the_epoch.as_millis()
+                                            //                 as u64,
+                                            //         });
+                                            //         let _response = rpc_client
+                                            //             .new_data(edge_data_request)
+                                            //             .await?;
+                                            //     }
+                                            // } else {
+                                            //     debug(format!("Device not found or aggregation function not defined!"));
+                                            // }
+                                            // }
                                             will_send = false;
                                         } else {
                                             match fwinfo.forward_protocol {
@@ -934,27 +860,6 @@ async fn forward(
                                         dev_eui_vec.into_iter().rev().collect(),
                                     ));
                                     debug(format!("Extracted DevEui {:x?}", dev_eui));
-                                    if mqtt_client.clone().is_some() {
-                                        let json_to_send = build_json_for_broker(
-                                            idx,
-                                            gwmac,
-                                            packet,
-                                            None,
-                                            phy.mhdr().mtype(),
-                                            None,
-                                            Some(dev_eui),
-                                        );
-                                        idx = (idx + 1) % 18446744073709551615;
-                                        debug(format!(
-                                            "Payload Prepared for broker {}",
-                                            json_to_send
-                                        ));
-                                        send_to_broker(
-                                            mqtt_client.clone(),
-                                            topic.clone(),
-                                            json_to_send,
-                                        );
-                                    };
                                     if true
                                         || !check_range(
                                             dev_eui,

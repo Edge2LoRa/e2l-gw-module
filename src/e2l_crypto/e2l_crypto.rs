@@ -512,6 +512,7 @@ pub(crate) mod e2l_crypto {
             &mut self,
             device_list: Vec<crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::Device>,
         ) -> crate::e2gw_rpc_server::e2gw_rpc_server::e2gw_rpc_server::GwResponse {
+            let device_list_len = device_list.len();
             for device in device_list {
                 // Create fake priv pub device key
                 let dev_fake_private_key = Some(P256SecretKey::random(&mut OsRng));
@@ -544,6 +545,7 @@ pub(crate) mod e2l_crypto {
                 status_code: 0,
                 message: "Devices added".to_string(),
             };
+            println!("ADDED {} DEVICES", device_list_len);
             return response;
         }
     }
