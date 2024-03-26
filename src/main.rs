@@ -24,8 +24,11 @@ extern crate p256;
 
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::FcntStruct;
 use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::GwFrameStats;
+use mqtt_client::mqtt_structs::mqtt_structs::MqttJson;
 // use e2l_crypto::e2l_crypto::e2l_crypto::ProcessedFrameResult;
 use mqtt_client::mqtt_structs::mqtt_structs::MqttVariables;
+use serde::ser::SerializeStruct;
+use serde::Serialize;
 use sysinfo::{CpuExt, System, SystemExt};
 
 // use e2gw_rpc_client::e2gw_rpc_client::e2gw_rpc_client::EdgeData;
@@ -708,8 +711,30 @@ async fn forward(
                                         }
 
                                         if e2ed_enabled {
-                                            let _tok: mqtt::DeliveryToken =
-                                                mqtt_process_topic.publish("Hello, World!");
+                                            let mqtt_payload: MqttJson;
+                                            unsafe {
+                                                let mqtt_payload_option = E2L_CRYPTO
+                                                    .get_json_mqtt_payload(
+                                                        dev_addr_string.clone(),
+                                                        fcnt,
+                                                        phy,
+                                                        packet,
+                                                        gwmac,
+                                                    );
+                                                match mqtt_payload_option {
+                                                    Some(mqtt_payload_result) => {
+                                                        let _tok: mqtt::DeliveryToken =
+                                                            mqtt_process_topic.publish(
+                                                                mqtt_payload_result
+                                                                    .serialize(SerializeStruct),
+                                                            );
+                                                    }
+                                                    _ => {
+                                                        will_send = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
 
                                             // unsafe {
                                             // let ret: Option<ProcessedFrameResult> = E2L_CRYPTO

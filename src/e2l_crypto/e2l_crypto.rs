@@ -13,7 +13,7 @@ pub(crate) mod e2l_crypto {
 
     use lorawan_encoding::default_crypto::DefaultFactory;
     use lorawan_encoding::keys::AES128;
-    use lorawan_encoding::parser::EncryptedDataPayload;
+    use lorawan_encoding::parser::{DataHeader, EncryptedDataPayload};
     use p256::elliptic_curve::point::AffineCoordinates;
     use p256::elliptic_curve::point::NonIdentity;
     use p256::elliptic_curve::rand_core::OsRng;
@@ -23,6 +23,9 @@ pub(crate) mod e2l_crypto {
     use p256::elliptic_curve::SecretKey as P256SecretKey;
     use sha2::Digest;
     use sha2::Sha256;
+
+    use crate::lorawan_structs::lorawan_structs::lora_structs::{Rxpk, RxpkContent};
+    use crate::mqtt_client::mqtt_structs::mqtt_structs::MqttJson;
 
     static AVG_ID: u8 = 1;
     static SUM_ID: u8 = 2;
@@ -271,6 +274,64 @@ pub(crate) mod e2l_crypto {
             return false;
         }
 
+        pub fn get_json_mqtt_payload(
+            &mut self,
+            dev_addr: String,
+            fcnt: u16,
+            phy: EncryptedDataPayload<Vec<u8>, DefaultFactory>,
+            packet: &RxpkContent,
+            gwmac: String,
+        ) -> Option<MqttJson> {
+            let dev_info: &mut DevInfo;
+
+            for dev_info_iter in self.active_directory.iter_mut() {
+                if dev_info_iter.dev_addr == dev_addr {
+                    dev_info = dev_info_iter;
+                    // dev_info_found = true;
+                    // GET KEYS
+                    let edge_s_enc_key: AES128 = dev_info.edge_s_enc_key.clone();
+                    let edge_s_int_key: AES128 = dev_info.edge_s_int_key.clone();
+                    let decrypted_data_payload = phy
+                        .decrypt(Some(&edge_s_int_key), Some(&edge_s_enc_key), fcnt.into())
+                        .unwrap();
+
+                    let frame_payload_result = decrypted_data_payload.frm_payload().unwrap();
+                    match frame_payload_result {
+                        lorawan_encoding::parser::FRMPayload::Data(frame_payload) => {
+                            let frame_payload_vec: Vec<u8> = frame_payload.to_vec();
+                            let frame_payload_str = String::from_utf8(frame_payload_vec.clone())
+                                .expect("Failed to Decode Frame Payload");
+                            let timetag: u64 = frame_payload_str.parse().unwrap();
+                            let last_index = frame_payload_vec.len() - 1;
+                            let sensor_1_value: f32 = frame_payload_vec[last_index].into();
+                            let sensor_2_value: f32 = frame_payload_vec[last_index - 1].into();
+                            let mut return_value = MqttJson::default();
+                            // return_value.id = 1;
+                            return_value.nodeid = dev_info_iter.dev_eui.clone();
+                            return_value.timestamp = timetag;
+                            // return_value.battery = battery;
+                            return_value.frequency = packet.freq;
+                            return_value.data_rate = packet.datr;
+                            return_value.coding_rate = packet.codr;
+                            return_value.gtw_id = gwmac;
+                            return_value.gtw_channel = (&packet).chan.unwrap();
+                            return_value.gtw_rssi = (&packet).rssi.unwrap();
+                            return_value.gtw_snr = (&packet).lsnr.unwrap();
+                            return_value.soil_hum = sensor_1_value;
+                            return_value.soil_temp = sensor_2_value;
+
+                            return Some(return_value);
+                        }
+                        _ => {
+                            println!("Failed to decrypt packet");
+                            return None;
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+
         /*
            @brief: This function processes the frame
            @param dev_addr: the dev_addr of the device
@@ -279,7 +340,7 @@ pub(crate) mod e2l_crypto {
            @return: None if aggregated function not defined or device not found (should never happen), an AggregatedResult Structure if success.
            @status_code: 0 if aggregated result if returned and need to send it to DM, -1 otherwise.
         */
-        pub fn process_frame(
+        pub fn _process_frame(
             &mut self,
             dev_addr: String,
             fcnt: u16,
